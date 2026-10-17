@@ -161,13 +161,27 @@ struct WalkthroughPane: View {
                         .toggleStyle(.checkbox)
                         .help("Scroll to the section for the slide on screen")
                 }
-                Button {
-                    model.linkStudyPagePanel()
+                Menu {
+                    Button("Link a walkthrough page or notes PDF…") { model.linkStudyPagePanel() }
+                    if !pages.isEmpty {
+                        Divider()
+                        ForEach(pages) { p in
+                            Button("Unlink “\(p.title)”") { model.unlinkStudyPage(p) }
+                        }
+                    }
+                    let gone = model.unlinkedStudyPages
+                    if !gone.isEmpty {
+                        Divider()
+                        Menu("Link again") {
+                            ForEach(gone) { p in Button(p.title) { model.relinkStudyPage(p) } }
+                        }
+                    }
                 } label: {
-                    Image(systemName: "link.badge.plus")
+                    Image(systemName: "link")
                 }
-                .buttonStyle(.borderless)
-                .help("Link another walkthrough page (.html) or notes PDF to this deck")
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Link or unlink walkthrough pages and notes for this deck")
                 .disabled(model.deck == nil)
             }
             .padding(.horizontal, 10)
@@ -182,7 +196,10 @@ struct WalkthroughPane: View {
                     Text(model.deck == nil ? "Open a lecture first." : "No walkthrough is linked to \(model.deck!.title) yet.")
                         .foregroundStyle(.secondary)
                     if model.deck != nil {
-                        Button("Link a walkthrough page…") { model.linkStudyPagePanel() }
+                        Button("Link a walkthrough page or notes PDF…") { model.linkStudyPagePanel() }
+                        ForEach(model.unlinkedStudyPages) { p in
+                            Button("Link “\(p.title)” again") { model.relinkStudyPage(p) }
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

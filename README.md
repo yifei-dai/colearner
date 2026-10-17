@@ -1,6 +1,6 @@
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.3.
+A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.4.
 
 - **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs; the strip at the bottom holds slide thumbnails.
 - **Right, Chat tab:** ask about the slide on screen. The first question on a slide sends the slide image, its text and the text of the slides around it automatically. Pick **Claude**, **ChatGPT**, or **Both** (two answers to compare).
@@ -19,6 +19,7 @@ Claude and ChatGPT share the slide's conversation: when you ask one of them, it 
 | Ask | type and press Enter (Shift+Enter for a new line), or use the buttons: *Explain this slide*, *Visualize it*, *Derive step by step*. Esc leaves the chat box (so ← → turn slides again) |
 | Model and effort | click the model button next to Claude / ChatGPT / Both (e.g. "● Opus 5.5 Medium ⌄"): pick a model and slide the effort (also in Settings ⌘,). **Choose models…** picks which models the menu shows; new models appear by themselves (marked *New* for a week). Each answer is labelled with the model and effort it used |
 | Plan usage | bottom right of the chat shows the short version; click it for the usage card: Claude's current session, week (all models) and week (Fable) with bars and reset times, and ChatGPT's limits, with your plan names. The card refreshes when opened (if older than 2 minutes) and with ↻; it also updates after every answer |
+| Link / unlink a walkthrough or notes PDF | Walkthrough tab › 🔗 menu: **Link a walkthrough page or notes PDF…**, **Unlink "…"** for each page, **Link again** for pages you unlinked. A page you link syncs to the slides right away (HTML pages through their slide references, notes PDFs through their slide stamps). Unlinked pages stay out even if they are found again; unlinking a notes PDF also stops Claude reading its .tex |
 | Jump to the chat box | ⌘L |
 | Chat / Walkthrough tab | ⌘1 / ⌘2 |
 | Stop an answer | the red **Stop** button |
@@ -54,7 +55,7 @@ New things are found on their own at launch (or Lectures › Reload library, ⇧
 - **New slide PDFs** in a course's slide folder.
 - **New notes PDFs** in a study folder (e.g. `notes/L06_notes.pdf`): matched exactly through the deck name and slide number pdfTeX stamps on every slide crop; a `.tex` with the same name is offered to Claude.
 - **New walkthrough/review pages** in a study folder (`output/walkthrough`, `output/quiz-review`, `output/mindmap`): matched by the deck codes on the page ("decks 03a and 03b", "W7L1"), "Lecture N", or the title's words against the deck titles. Checked on the author's library at the time: discovery alone found all 29 links, with nothing missing or extra.
-- Anything else: the 🔗 button in the Walkthrough tab links a page by hand.
+- Anything else: the 🔗 menu in the Walkthrough tab links a page by hand, and unlinks any page (listed, found, or linked) for that deck. Hand links and unlinks live in `links.json`.
 
 - Courses whose library.json `layout` is `twoUp` (handouts with two slides per page): the app splits those PDFs so that slide numbers match the printed ones. `FrameDetector.swift` measures where the two slides sit in each deck when it opens (it votes over the first pages; the slide is a block of columns with one long dark run, or its border lines when the slide is light), so a new deck with a slightly different layout is still cut at the slide borders. library.json's frames are only the fallback. Checked on 10 two-up decks: every page agreed with the detected frames.
 - A replaced deck: library.json can hide the old deck (`"hidden": true`) and keep its walkthrough linked to the new deck through a page map (`map`).
@@ -97,6 +98,7 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 
 ## Changelog
 
+- **0.1.4** (2026-10-17): link and unlink study pages per deck from the Walkthrough tab (🔗 menu), with Link again; hand-linked pages of two-up decks use the split-slide numbering. Tested with the real library loader on a scratch settings folder (11/11).
 - **0.1.3** (2026-10-17): walkthrough pages and notes PDFs made later are found automatically (StudyDiscovery.swift).
 - **0.1.2** (2026-10-17): model lists come from the tools and refresh at every launch (and with *Refresh list*): Claude Code's aliases resolved with `/model <alias>`, effort levels from `claude --help`, Codex's `model/list`. Choose which models the menu shows; *New* badge for new models (and when an alias like "opus" starts meaning a newer model); effort is a slider; no model descriptions. A refresh that comes back partial or offline (Codex's built-in presets) is not applied; the plan's list comes from Codex's own cache, which model/list refreshes. Reviewed (2 reviewers + verifiers): model buttons no longer get rebuilt while an answer streams (clicks were lost), the effort slider keeps keyboard focus and drags across redraws.
 - **0.1.1** (2026-10-17): model and effort menu, click-to-open usage card refreshed on demand (`claude -p /usage`, Codex app-server rate limits), ← → turn slides, 2-up slide frames measured per deck, chat page no longer scrolls away.

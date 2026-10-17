@@ -113,7 +113,10 @@ final class AppModel: ObservableObject {
         // Refresh open tabs with the new library data (links may have changed).
         let all = Dictionary(courses.flatMap(\.decks).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         openDecks = openDecks.map { all[$0.path] ?? $0 }
-        if let d = deck, let fresh = all[d.path] { deck = fresh }
+        if let d = deck, var fresh = all[d.path] {
+            fresh.layout = d.layout   // keep the slide frames measured when the deck was opened
+            deck = fresh
+        }
     }
 
     func deck(path: String) -> Deck? {
@@ -243,20 +246,67 @@ final class AppModel: ObservableObject {
         if let d = deck(path: path) { open(d) }
     }
 
+    /// Link a walkthrough / review page or a notes PDF to the open deck. It syncs to the slides like the
+    /// built-in links: HTML pages through their slide references, notes PDFs through their slide stamps.
     func linkStudyPagePanel() {
         guard let d = deck else { return }
         let p = NSOpenPanel()
         p.allowedContentTypes = [.html, .pdf]
         p.message = "Choose a walkthrough or review page (.html) or a notes PDF for \(d.title)"
+        if let dir = d.walkthroughs.first.map({ URL(fileURLWithPath: $0.path).deletingLastPathComponent() }) { p.directoryURL = dir }
         guard p.runModal() == .OK, let url = p.url else { return }
+        let path = url.standardizedFileURL.path
         var links = Library.loadUserLinks()
-        var list = links.walkthroughs[d.path] ?? []
-        let page = StudyPage(title: url.deletingPathExtension().lastPathComponent, path: url.standardizedFileURL.path)
-        if !list.contains(where: { $0.path == page.path }) { list.append(page) }
-        links.walkthroughs[d.path] = list
+        links.unlinked?[d.path]?.removeAll { $0.path == path }
+        // Already linked (by the library or by looking)? Just show it.
+        if !d.walkthroughs.contains(where: { $0.path == path }) {
+            var list = links.walkthroughs[d.path] ?? []
+            let isPDF = url.pathExtension.lowercased() == "pdf"
+            let page = StudyPage(title: url.deletingPathExtension().lastPathComponent, path: path,
+                                 numbering: isPDF ? nil : d.studyNumbering)
+            if !list.contains(where: { $0.path == path }) { list.append(page) }
+            links.walkthroughs[d.path] = list
+        }
         Library.saveUserLinks(links)
         reloadLibrary()
+        selectedStudyPage[d.path] = path
+        rightTab = .walkthrough
+    }
+
+    /// Remove a page from the open deck's Walkthrough tab (whether it came from the library, from looking,
+    /// or from an earlier link). It stays out until linked again.
+    func unlinkStudyPage(_ page: StudyPage) {
+        guard let d = deck else { return }
+        var links = Library.loadUserLinks()
+        links.walkthroughs[d.path]?.removeAll { $0.path == page.path }
+        var un = links.unlinked ?? [:]
+        if !(un[d.path] ?? []).contains(where: { $0.path == page.path }) { un[d.path, default: []].append(page) }
+        links.unlinked = un
+        Library.saveUserLinks(links)
+        if selectedStudyPage[d.path] == page.path { selectedStudyPage[d.path] = nil }
+        reloadLibrary()
+    }
+
+    /// Undo an unlink.
+    func relinkStudyPage(_ page: StudyPage) {
+        guard let d = deck else { return }
+        var links = Library.loadUserLinks()
+        links.unlinked?[d.path]?.removeAll { $0.path == page.path }
+        Library.saveUserLinks(links)
+        reloadLibrary()
+        // A page that was linked by hand (not listed in the library or found by looking) is linked by hand again.
+        if deck?.walkthroughs.contains(where: { $0.path == page.path }) == false {
+            links.walkthroughs[d.path, default: []].append(page)
+            Library.saveUserLinks(links)
+            reloadLibrary()
+        }
         selectedStudyPage[d.path] = page.path
+    }
+
+    /// Pages unlinked from the open deck that still exist (for "Link again").
+    var unlinkedStudyPages: [StudyPage] {
+        guard let d = deck else { return [] }
+        return (Library.loadUserLinks().unlinked?[d.path] ?? []).filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     // MARK: pages

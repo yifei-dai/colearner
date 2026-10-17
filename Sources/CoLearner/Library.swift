@@ -33,6 +33,8 @@ struct Deck: Hashable, Identifiable {
     /// Text files the assistant may read for extra context (e.g. typed scribe notes).
     var contextFiles: [String]
     var layout: SlideLayout = .single
+    /// How study pages of this course number slides ("identity" for 2-up handouts); used for pages linked by hand.
+    var studyNumbering: String? = nil
     var id: String { path }
     var url: URL { URL(fileURLWithPath: path) }
 }
@@ -76,12 +78,19 @@ private struct LibraryFile: Codable {
 struct UserLinks: Codable {
     var walkthroughs: [String: [StudyPage]] = [:]
     var extraDecks: [String] = []
+    /// deck path -> pages the user unlinked (listed, discovered or linked before). Optional so older files still load.
+    var unlinked: [String: [StudyPage]]?
+
+    func isUnlinked(_ page: String, from deck: String) -> Bool {
+        unlinked?[deck]?.contains { $0.path == page } ?? false
+    }
 }
 
 enum AppPaths {
     static var support: URL {
-        let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Co-learner", isDirectory: true)
+        let u = ProcessInfo.processInfo.environment["COLEARNER_SUPPORT_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Co-learner", isDirectory: true)
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }
@@ -167,10 +176,16 @@ enum Library {
                 let extra = StudyDiscovery.scan(root: c.root, dirs: dirs, numbering: c.studyNumbering, decks: found.map(\.0))
                 for i in found.indices {
                     var d = found[i].0
-                    for p in extra.pages[d.path] ?? [] where !d.walkthroughs.contains(where: { $0.path == p.path }) {
+                    for p in extra.pages[d.path] ?? [] where !d.walkthroughs.contains(where: { $0.path == p.path })
+                        && !links.isUnlinked(p.path, from: d.path) {
                         d.walkthroughs.append(p)
                     }
-                    for f in extra.context[d.path] ?? [] where !d.contextFiles.contains(f) { d.contextFiles.append(f) }
+                    // A notes .tex goes with its PDF: unlinking the PDF also stops Claude reading the .tex.
+                    let unlinkedTex = Set((links.unlinked?[d.path] ?? []).filter(\.isPDF).map {
+                        URL(fileURLWithPath: $0.path).deletingPathExtension().appendingPathExtension("tex").path })
+                    for f in extra.context[d.path] ?? [] where !d.contextFiles.contains(f) && !unlinkedTex.contains(f) {
+                        d.contextFiles.append(f)
+                    }
                     // Walkthrough pages before notes PDFs, keeping each group's order.
                     d.walkthroughs = d.walkthroughs.filter { !$0.isPDF } + d.walkthroughs.filter(\.isPDF)
                     found[i].0 = d
@@ -195,11 +210,15 @@ enum Library {
         for p in links.walkthroughs[path] ?? [] where !pages.contains(where: { $0.path == p.path }) {
             pages.append(p)
         }
-        pages = pages.filter { FileManager.default.fileExists(atPath: $0.path) }
+        pages = pages.filter { FileManager.default.fileExists(atPath: $0.path) && !links.isUnlinked($0.path, from: path) }
         let title = entry?.title ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        // Unlinking a notes PDF also stops Claude from reading the .tex of the same name.
+        let unlinkedTex = Set((links.unlinked?[path] ?? []).filter(\.isPDF).map {
+            URL(fileURLWithPath: $0.path).deletingPathExtension().appendingPathExtension("tex").path })
+        let context = (entry?.context ?? []).filter { FileManager.default.fileExists(atPath: $0) && !unlinkedTex.contains($0) }
         return Deck(path: path, title: title, courseID: course.id, courseName: course.name,
-                    walkthroughs: pages, contextFiles: (entry?.context ?? []).filter { FileManager.default.fileExists(atPath: $0) },
-                    layout: entry?.layout ?? course.layout ?? .single)
+                    walkthroughs: pages, contextFiles: context,
+                    layout: entry?.layout ?? course.layout ?? .single, studyNumbering: course.studyNumbering)
     }
 
     static func loadUserLinks() -> UserLinks {
