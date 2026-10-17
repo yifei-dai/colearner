@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Co-learner chat</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="chat.css">
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/marked.umd.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script src="render.js"></script>
+</head>
+<body>
+<header id="head">
+  <div id="where">
+    <span id="where-deck">No slides open</span>
+    <span id="where-slide"></span>
+  </div>
+  <div id="head-actions">
+    <button id="btn-clear" class="ghost" title="Delete this slide's chat">Clear</button>
+  </div>
+</header>
+<div id="others" hidden>
+  <span class="others-label">Other slides with chats:</span>
+  <span id="others-list"></span>
+</div>
+
+<main id="log" aria-live="polite"></main>
+
+<footer id="composer">
+  <div id="quick">
+    <button class="chip" data-action="explain">Explain this slide</button>
+    <button class="chip" data-action="visualize">Visualize it</button>
+    <button class="chip" data-action="derive">Derive step by step</button>
+  </div>
+  <div id="inputwrap">
+    <textarea id="input" rows="2" placeholder="Ask about this slide…  (Enter to send, Shift+Enter for a new line)"></textarea>
+  </div>
+  <div id="bar">
+    <div id="providers" role="radiogroup" aria-label="Ask">
+      <button data-p="claude" role="radio">Claude</button>
+      <button data-p="codex" role="radio">ChatGPT</button>
+      <button data-p="both" role="radio">Both</button>
+    </div>
+    <span id="attach" title="The current slide image and text are sent with your first question on this slide"></span>
+    <span class="grow"></span>
+    <button id="btn-send" class="primary">Send</button>
+  </div>
+</footer>
+<script src="chat.js"></script>
+</body>
+</html>
