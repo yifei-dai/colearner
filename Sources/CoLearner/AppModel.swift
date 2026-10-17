@@ -39,7 +39,7 @@ final class AppModel: ObservableObject {
     lazy var chat = ChatController(model: self)
     lazy var walk = WalkthroughController()
     lazy var studyPDF = StudyPDFController()
-    private let thumbs = NSCache<NSString, NSImage>()
+    let thumbs = ThumbStore()
 
     var deckID: String { deck?.path ?? "" }
     var pageCount: Int { document?.pageCount ?? 0 }
@@ -213,12 +213,7 @@ final class AppModel: ObservableObject {
     }
 
     func thumbnail(_ p: Int) -> NSImage? {
-        let key = "\(deckID)#\(p)" as NSString
-        if let img = thumbs.object(forKey: key) { return img }
-        guard let pg = document?.page(at: p - 1) else { return nil }
-        let img = pg.thumbnail(of: NSSize(width: 208, height: 132), for: .cropBox)
-        thumbs.setObject(img, forKey: key)
-        return img
+        thumbs.image(key: "\(deckID)#\(p)", page: document?.page(at: p - 1))
     }
 
     func refreshChatPages() {

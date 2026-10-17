@@ -60,7 +60,7 @@ struct ThumbnailStrip: View {
                 LazyHStack(spacing: 8) {
                     ForEach(1...max(model.pageCount, 1), id: \.self) { p in
                         if model.pageCount > 0 {
-                            ThumbCell(page: p, selected: p == model.page, hasChat: model.chatPages.contains(p))
+                            ThumbCell(thumbs: model.thumbs, page: p, selected: p == model.page, hasChat: model.chatPages.contains(p))
                                 .id(p)
                                 .onTapGesture { model.page = p }
                         }
@@ -84,6 +84,7 @@ struct ThumbnailStrip: View {
 
 private struct ThumbCell: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject var thumbs: ThumbStore
     let page: Int
     let selected: Bool
     let hasChat: Bool
@@ -108,5 +109,43 @@ private struct ThumbCell: View {
             }
             Text("\(page)").font(.system(size: 10)).foregroundStyle(selected ? Color.accentColor : .secondary)
         }
+    }
+}
+
+/// Slide thumbnails, rendered on the main thread in short slices so a big deck never freezes the window.
+/// The cells requested last (around the slide being scrolled to) are drawn first.
+@MainActor
+final class ThumbStore: ObservableObject {
+    @Published private(set) var version = 0
+    private let cache = NSCache<NSString, NSImage>()
+    private var queued = Set<String>()
+    private var work: [(String, PDFPage)] = []
+    private var scheduled = false
+
+    func image(key: String, page: PDFPage?) -> NSImage? {
+        if let img = cache.object(forKey: key as NSString) { return img }
+        guard let page, !queued.contains(key) else { return nil }
+        queued.insert(key)
+        work.append((key, page))
+        schedule()
+        return nil
+    }
+
+    private func schedule() {
+        guard !scheduled else { return }
+        scheduled = true
+        DispatchQueue.main.async { [weak self] in self?.drain() }
+    }
+
+    private func drain() {
+        scheduled = false
+        let start = Date()
+        while let (key, page) = work.popLast() {
+            cache.setObject(page.thumbnail(of: NSSize(width: 208, height: 132), for: .cropBox), forKey: key as NSString)
+            queued.remove(key)
+            if Date().timeIntervalSince(start) > 0.03 { break }
+        }
+        version += 1
+        if !work.isEmpty { schedule() }
     }
 }

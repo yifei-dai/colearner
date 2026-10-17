@@ -8,6 +8,8 @@ A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.
 
 Each slide keeps its own conversation. Follow-ups continue the same conversation, and the slide's old Q&A is still there when you come back. An orange dot on a thumbnail means that slide has a chat.
 
+Claude and ChatGPT share the slide's conversation: when you ask one of them, it is also shown whatever it hasn't seen yet (the other one's answers, or questions you sent only to the other one), so "ChatGPT says 2 solutions, you say 4 — who's right?" works. Each assistant is only "busy" for itself: in Both mode you can follow up with Claude while ChatGPT is still writing.
+
 ## Using it
 
 | Action | How |
@@ -29,7 +31,7 @@ If a linked folder is on your Desktop, macOS asks once whether Co-learner may ac
 
 No API keys. The app runs the command-line tools that are already logged in on this Mac:
 
-- **Claude:** Claude Code in headless mode (`claude -p`, streamed JSON). The app picks the newest copy it can find, including the one the Claude desktop app keeps up to date. Opus 5.5 needs Claude Code 2.1.280 or newer. It runs with its own system prompt, no MCP servers, no settings or memory files, and read-only tools (Read, Grep, Glob) limited to the deck's folder and its notes folders, so it can look at the typed scribe notes or a walkthrough page when a question needs more than the slide.
+- **Claude:** Claude Code in headless mode (`claude -p`, streamed JSON). The app picks the newest copy it can find, including the one the Claude desktop app keeps up to date. Opus 5.5 needs Claude Code 2.1.280 or newer. It runs with its own system prompt, no MCP servers, no settings or memory files, and read-only tools (Read, Grep, Glob). It is told which files belong to the deck (walkthrough page, typed lecture notes `.tex`, lecture transcripts) and reads them when a question needs more than the slide; deny rules keep it out of the handwritten scans (`*inclass*`, `*_scribing_*.pdf`).
 - **ChatGPT:** the Codex CLI (`codex exec --json`), using the ChatGPT login, read-only sandbox, shell tools and web search off. Default model `gpt-6-astra`, reasoning effort medium.
 
 Each slide's conversation keeps one Claude session and one Codex thread, resumed for follow-ups.
@@ -84,4 +86,4 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 
 ## Changelog
 
-- **0.1** (2026-10-17): first version.
+- **0.1** (2026-10-17): first version. Reviewed by four independent reviewers (Swift core, UI/model, chat page with 103 browser tests, requirements) with adversarial verification; all confirmed findings fixed before release (two-up slide image and text, deck-switch slide, notes map, chat-page sandbox and sanitizing, partial answers on quit, session handling).
