@@ -123,22 +123,39 @@ final class ChatController: NSObject, WKNavigationDelegate {
         let page = model.page
         let providers: [Provider] = choice == "both" ? [.claude, .codex] : [Provider(rawValue: choice) ?? .claude]
         let before = store.thread(deck.path, page)
-        if before.messages.contains(where: { $0.status == .streaming }) { return }
+        // Only the assistants being asked must be free (in Both mode Claude often finishes long before ChatGPT).
+        if before.messages.contains(where: { $0.status == .streaming && providers.contains($0.provider ?? .claude) }) { return }
 
         var context: SlideContext?
         let user = ChatMessage(role: .user, text: text, display: display)
         store.update(deck.path, page) { $0.messages.append(user) }
         push(user, deck: deck.path, page: page, immediate: true)
+        // Everything finished so far on this slide (answers still streaming are not "said" yet).
+        let prior = before.messages.filter { $0.status != .streaming && !$0.text.isEmpty }
 
         for p in providers {
             let resume = before.session(for: p)
-            var prompt = text
+            var prompt: String
             var image: URL?
             if resume == nil {
-                if context == nil { context = SlideContext.make(deck: deck, document: doc, page: page) }
+                if context == nil { context = SlideContext.make(deck: deck, document: doc, page: page, texts: model.slideTexts) }
                 guard let ctx = context else { continue }
-                prompt = ctx.promptHeader(includeFiles: p == .claude) + earlierTurns(before, for: p) + "<question>\n\(text)\n</question>"
+                prompt = ctx.promptHeader(includeFiles: p == .claude)
+                    + transcript(Array(prior.suffix(8)), tag: "earlier_conversation_on_this_slide")
+                    + "<question>\n\(text)\n</question>"
                 image = ctx.pngURL
+            } else {
+                // The session already has its own turns; add what it hasn't seen: the other assistant's answers
+                // (so "ChatGPT says 2 solutions, you say 4" works) and questions that were sent only to the other one.
+                let seen = Set(before.seenBy?[p.rawValue] ?? prior.map(\.id))
+                let missed = prior.filter { !seen.contains($0.id) && $0.provider != p }
+                prompt = missed.isEmpty ? text
+                    : transcript(missed, tag: "messages_on_this_slide_you_have_not_seen") + "<question>\n\(text)\n</question>"
+            }
+            store.update(deck.path, page) { t in
+                var map = t.seenBy ?? [:]
+                map[p.rawValue] = prior.map(\.id) + [user.id]
+                t.seenBy = map
             }
             var a = ChatMessage(role: .assistant, provider: p, text: "", status: .streaming)
             a.activity = "starting…"
@@ -162,17 +179,16 @@ final class ChatController: NSObject, WKNavigationDelegate {
         model.refreshChatPages()
     }
 
-    /// When a provider joins a slide conversation late, tell it what was said so far.
-    private func earlierTurns(_ t: ChatThread, for p: Provider) -> String {
-        let prior = t.messages.filter { $0.status != .streaming && !$0.text.isEmpty }
-        guard !prior.isEmpty else { return "" }
-        var s = "<earlier_conversation_on_this_slide>\n"
-        for m in prior.suffix(8) {
+    /// Earlier messages as a quoted block, for an assistant that has not seen them.
+    private func transcript(_ msgs: [ChatMessage], tag: String) -> String {
+        guard !msgs.isEmpty else { return "" }
+        var s = "<\(tag)>\n"
+        for m in msgs {
             let who = m.role == .user ? "Student" : (m.provider?.displayName ?? "Assistant")
             let body = m.text.count > 2500 ? String(m.text.prefix(2500)) + " …" : m.text
             s += "[\(who)]: \(body)\n\n"
         }
-        return s + "</earlier_conversation_on_this_slide>\n\n"
+        return s + "</\(tag)>\n\n"
     }
 
     private func readableDirs(for deck: Deck) -> [URL] {
@@ -186,12 +202,14 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private func apply(_ ev: BackendEvent, id: String, provider: Provider, deck: String, page: Int, usedResume: String?) {
         var updated: ChatMessage?
         var finished = false
+        var sessionChanged = false
         store.update(deck, page) { t in
             guard let i = t.messages.firstIndex(where: { $0.id == id }) else { return }
             var m = t.messages[i]
             switch ev {
             case .session(let s):
                 t.setSession(s, for: provider)
+                sessionChanged = true
             case .model(let name):
                 m.model = name
             case .delta(let s):
@@ -213,8 +231,14 @@ final class ChatController: NSObject, WKNavigationDelegate {
                 m.error = e
                 m.activity = nil
                 finished = true
-                // A broken resume would fail every follow-up; start fresh (with the slide) next time.
-                if usedResume != nil { t.setSession(nil, for: provider) }
+                // Only a missing/broken session is dropped (then the next question re-sends the slide);
+                // limits, overload and network errors keep it.
+                let l = e.lowercased()
+                if usedResume != nil,
+                   l.contains("no conversation found") || l.contains("session") && (l.contains("not found") || l.contains("invalid"))
+                    || l.contains("rollout") || l.contains("thread") && l.contains("not found") {
+                    t.setSession(nil, for: provider)
+                }
             }
             t.messages[i] = m
             updated = m
@@ -222,8 +246,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
         if finished {
             running.removeValue(forKey: id)
             runWhere.removeValue(forKey: id)
-            store.save(deck)
         }
+        if finished || sessionChanged { store.save(deck) }
         if let updated { push(updated, deck: deck, page: page, immediate: finished) }
     }
 
@@ -265,22 +289,48 @@ final class ChatController: NSObject, WKNavigationDelegate {
         showCurrent()
     }
 
+    /// On quit: keep what has streamed so far, mark it stopped, save, and end the CLIs right away.
     func stopAll() {
-        for (_, h) in running { h.cancel() }
+        var decks = Set<String>()
+        for (id, w) in runWhere {
+            store.update(w.deck, w.page) { t in
+                if let i = t.messages.firstIndex(where: { $0.id == id }), t.messages[i].status == .streaming {
+                    t.messages[i].status = .stopped
+                    t.messages[i].activity = nil
+                }
+            }
+            decks.insert(w.deck)
+        }
+        for d in decks { store.save(d) }
+        for (_, h) in running { h.terminateNow() }
         running.removeAll()
+        runWhere.removeAll()
     }
 
     // MARK: WKNavigationDelegate
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
-        // Keep the chat page in place; open real links in the browser.
-        if action.navigationType == .linkActivated, let u = action.request.url {
-            if ["http", "https"].contains(u.scheme ?? "") { NSWorkspace.shared.open(u) }
+        let u = action.request.url
+        let isMain = action.targetFrame?.isMainFrame ?? true
+        if isMain {
+            // Only the initial load (or a reload) of chat.html itself; links open in the browser.
+            if action.navigationType != .formSubmitted, let u, u.isFileURL, u.lastPathComponent == "chat.html", u.query == nil {
+                decisionHandler(.allow)
+                return
+            }
+            if action.navigationType == .linkActivated, let u, ["http", "https"].contains(u.scheme ?? "") {
+                NSWorkspace.shared.open(u)
+            }
             decisionHandler(.cancel)
             return
         }
-        decisionHandler(.allow)
+        // Visual iframes: their srcdoc, plus the scripts and styles a visual may pull from a CDN.
+        if action.navigationType == .formSubmitted || action.navigationType == .linkActivated {
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(["about", "https", "data", "blob"].contains(u?.scheme ?? "about") ? .allow : .cancel)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -294,7 +344,10 @@ final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     weak var target: ChatController?
     init(_ t: ChatController) { target = t }
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any] else { return }
+        // WebKit exposes handlers to every frame, including the sandboxed "Visualize it" iframes;
+        // only the chat page's own main frame may send commands.
+        guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.lastPathComponent == "chat.html",
+              let body = message.body as? [String: Any] else { return }
         MainActor.assumeIsolated { target?.handle(body) }
     }
 }

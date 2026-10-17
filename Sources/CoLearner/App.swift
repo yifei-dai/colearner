@@ -24,7 +24,8 @@ struct CoLearnerApp: App {
                 Divider()
                 Button("Ask About This Slide") {
                     model.rightTab = .chat
-                    model.chat.focusInput()
+                    // The chat view is only back in the window after this update; focus it then.
+                    DispatchQueue.main.async { model.chat.focusInput() }
                 }.keyboardShortcut("l", modifiers: .command)
                 Button("Show Walkthrough") { model.rightTab = .walkthrough }
                     .keyboardShortcut("2", modifiers: .command)

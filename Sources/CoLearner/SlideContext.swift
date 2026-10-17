@@ -12,13 +12,15 @@ struct SlideContext {
     var nextText: String?
     var pngURL: URL
 
+    /// `texts` holds each slide's own text (for 2-up handouts it was read per frame from the original page,
+    /// because the cropped copies share one text layer).
     @MainActor
-    static func make(deck: Deck, document: PDFDocument, page: Int) -> SlideContext? {
+    static func make(deck: Deck, document: PDFDocument, page: Int, texts: [String]) -> SlideContext? {
         guard let pdfPage = document.page(at: page - 1) else { return nil }
-        let png = renderPNG(pdfPage, deckPath: deck.path, page: page)
+        let png = renderPNG(pdfPage, deck: deck, page: page)
         func text(_ p: Int) -> String? {
-            guard p >= 1, p <= document.pageCount, let s = document.page(at: p - 1)?.string else { return nil }
-            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard p >= 1, p <= texts.count else { return nil }
+            let t = texts[p - 1].trimmingCharacters(in: .whitespacesAndNewlines)
             return t.isEmpty ? nil : t
         }
         guard let png else { return nil }
@@ -28,8 +30,11 @@ struct SlideContext {
     }
 
     /// Renders the page so its long edge is 1568 px (the largest size Claude uses without downscaling).
-    static func renderPNG(_ page: PDFPage, deckPath: String, page number: Int) -> URL? {
-        let h = SHA256.hash(data: Data(deckPath.utf8)).map { String(format: "%02x", $0) }.joined().prefix(12)
+    static func renderPNG(_ page: PDFPage, deck: Deck, page number: Int) -> URL? {
+        // The key changes when the PDF is replaced or the 2-up frames change, so a stale image is never reused.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: deck.path)
+        let stamp = "\(deck.path)|\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\((attrs?[.size] as? Int) ?? 0)|\(deck.layout.frames ?? [])|v2"
+        let h = SHA256.hash(data: Data(stamp.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
         let dir = AppPaths.cache.appendingPathComponent("slides", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("\(h)-p\(number).png")
@@ -50,8 +55,7 @@ struct SlideContext {
         cg.setFillColor(NSColor.white.cgColor)
         cg.fill(CGRect(x: 0, y: 0, width: w, height: hgt))
         cg.scaleBy(x: scale, y: scale)
-        page.transform(cg, for: .cropBox)   // moves the crop box to the origin and applies the page rotation
-        page.draw(with: .cropBox, to: cg)
+        page.draw(with: .cropBox, to: cg)   // maps the crop box to the origin itself (no extra transform)
         NSGraphicsContext.restoreGraphicsState()
         guard let data = rep.representation(using: .png, properties: [:]) else { return nil }
         do { try data.write(to: url, options: .atomic) } catch { return nil }
@@ -67,13 +71,21 @@ struct SlideContext {
         var s = "<slide_context>\n"
         s += "Course: \(deck.courseName)\n"
         s += "Lecture deck: \(deck.title) (PDF: \(deck.path))\n"
-        s += "Current slide: \(page) of \(pageCount) (PDF page number). The slide image is attached.\n"
+        let numbering = deck.layout.isTwoUp ? "the slide number printed on the slide" : "PDF page number"
+        s += "Current slide: \(page) of \(pageCount) (\(numbering)). The slide image is attached.\n"
         s += "Text extracted from slide \(page):\n\"\"\"\n\(Self.clip(text, 4000))\n\"\"\"\n"
         if let prevText { s += "Text of slide \(page - 1) (previous):\n\"\"\"\n\(Self.clip(prevText, 1500))\n\"\"\"\n" }
         if let nextText { s += "Text of slide \(page + 1) (next):\n\"\"\"\n\(Self.clip(nextText, 1500))\n\"\"\"\n" }
-        let files = deck.walkthroughs.map { "- Study page (\($0.title)): \($0.path)" } + deck.contextFiles.map { "- Lecture notes: \($0)" }
+        let files = deck.walkthroughs.filter { !$0.isPDF }.map { "- Study page (\($0.title)): \($0.path)" }
+            + deck.contextFiles.map { f -> String in
+                if f.contains("/subtitles/") { return "- Transcript of the instructor's recorded lecture on this topic: \(f)" }
+                if f.hasSuffix(".tex") { return "- Typed lecture notes (LaTeX, includes remarks made in class): \(f)" }
+                return "- Lecture notes: \(f)"
+            }
         if includeFiles, !files.isEmpty {
-            s += "Related files you may read only if the question needs more than the slide:\n" + files.joined(separator: "\n") + "\n"
+            s += "Related files you may read only if the question needs more than the slide (read only these):\n"
+                + files.joined(separator: "\n") + "\n"
+                + "Never open handwritten scans (*_inclass_notes.pdf, *_scribing_*.pdf).\n"
         }
         s += "</slide_context>\n\n"
         return s

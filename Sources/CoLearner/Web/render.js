@@ -96,7 +96,9 @@
         if (src[i + 1] === "$") {
           const close = src.indexOf("$$", i + 2);
           if (close !== -1) {
-            out += push(src.slice(i + 2, close), true);
+            let tex = src.slice(i + 2, close);
+            if (/^[ \t]*>/.test(src.slice(src.lastIndexOf("\n", i) + 1, i))) tex = tex.replace(/^[ \t]*>[ \t]?/gm, "");
+            out += push(tex, true);
             i = close + 2;
             continue;
           }
@@ -156,16 +158,46 @@
 
   const PH_RE = new RegExp(PH_OPEN + "(\\d+)" + PH_CLOSE, "g");
 
+  // Model output is untrusted: no forms (they would navigate the chat page), no global <style>,
+  // no embedded frames or inline styles. Visuals get their own sandboxed iframe (chat.js).
+  const PURIFY = {
+    FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "option", "iframe", "frame",
+      "object", "embed", "link", "meta", "base", "dialog"],
+    FORBID_ATTR: ["style"],
+  };
+
   function renderMarkdown(src) {
     const { text, maths } = extractMath(src || "");
-    let html = window.marked.parse(text, { gfm: true, breaks: false, async: false });
-    html = window.DOMPurify.sanitize(html, { ADD_ATTR: ["target"] });
-    html = html.replace(PH_RE, (_, k) => {
-      const m = maths[Number(k)];
-      if (!m) return "";
-      return katexHTML(m.tex, m.display);
-    });
-    return html;
+    const html = window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true, breaks: false, async: false }), PURIFY);
+    if (!maths.length) return html;
+    // Swap placeholders for KaTeX in text nodes only; inside attributes (e.g. image alt) put the TeX back.
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    const textNodes = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (n.nodeType === Node.TEXT_NODE) {
+        if (n.nodeValue.indexOf(PH_OPEN) !== -1) textNodes.push(n);
+      } else {
+        for (const a of Array.from(n.attributes)) {
+          if (a.value.indexOf(PH_OPEN) !== -1) {
+            n.setAttribute(a.name, a.value.replace(PH_RE, (_, k) => (maths[Number(k)] ? "$" + maths[Number(k)].tex + "$" : "")));
+          }
+        }
+      }
+    }
+    for (const n of textNodes) {
+      const span = document.createElement("span");
+      const inCode = n.parentElement && n.parentElement.closest("code, pre");
+      span.innerHTML = n.nodeValue.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]).replace(PH_RE, (_, k) => {
+        const m = maths[Number(k)];
+        if (!m) return "";
+        if (inCode) return (m.display ? "$$" + m.tex + "$$" : "$" + m.tex + "$").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+        return katexHTML(m.tex, m.display);
+      });
+      n.replaceWith(...span.childNodes);
+    }
+    return tpl.innerHTML;
   }
 
   window.CLRender = { renderMarkdown, extractMath };

@@ -13,10 +13,15 @@ final class AppModel: ObservableObject {
     @Published var page: Int = 1 {
         didSet {
             let clamped = min(max(page, 1), max(pageCount, 1))
-            if clamped != page { page = clamped; return }
-            if page != oldValue { pageDidChange() }
+            if clamped != page { page = clamped; return }   // re-enters didSet once with the clamped value
+            if page != lastNotifiedPage { lastNotifiedPage = page; pageDidChange() }
         }
     }
+    private var lastNotifiedPage = 0
+    /// Each slide's own text (2-up handouts are read per frame from the original page).
+    private(set) var slideTexts: [String] = []
+    /// Set when macOS refused access to a course folder (the one-time Desktop prompt was declined).
+    @Published var folderAccessDenied = false
     @Published var rightTab: RightTab = .chat
     @Published var chatPages: Set<Int> = []
     @Published var provider: String = UserDefaults.standard.string(forKey: "provider") ?? "claude" {
@@ -47,7 +52,9 @@ final class AppModel: ObservableObject {
     // MARK: library
 
     func reloadLibrary() {
-        courses = Library.load()
+        let (loaded, denied) = Library.load()
+        courses = loaded
+        folderAccessDenied = denied
         // Refresh open tabs with the new library data (links may have changed).
         let all = Dictionary(courses.flatMap(\.decks).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         openDecks = openDecks.map { all[$0.path] ?? $0 }
@@ -71,11 +78,12 @@ final class AppModel: ObservableObject {
             return
         }
         if !openDecks.contains(where: { $0.path == d.path }) { openDecks.append(d) }
-        thumbs.removeAllObjects()
         deck = d
-        document = doc
+        document = doc.document
+        slideTexts = doc.texts
         let last = UserDefaults.standard.integer(forKey: "lastPage.\(d.path)")
-        page = min(max(last, 1), max(doc.pageCount, 1))
+        lastNotifiedPage = 0
+        page = min(max(last, 1), max(doc.document.pageCount, 1))
         saveSession()
         chatPages = Set(chat.store.pagesWithChats(d.path))
         chat.showCurrent()
@@ -96,34 +104,47 @@ final class AppModel: ObservableObject {
                 let next = openDecks[min(i, openDecks.count - 1)]
                 deck = nil
                 open(next)
+                if deck == nil {   // the next PDF could not be opened: drop its tab too and show nothing
+                    openDecks.removeAll { $0.path == next.path }
+                    document = nil
+                    slideTexts = []
+                    chatPages = []
+                    chat.showCurrent()
+                }
             }
         }
         saveSession()
     }
 
-    /// One PDF page per slide. 2-up handouts are split into two cropped pages.
-    static func makeDocument(for d: Deck) -> PDFDocument? {
+    /// One PDF page per slide, plus each slide's text. 2-up handouts are split into two cropped pages; their
+    /// text is read per frame from the original page (cropped copies share one text layer).
+    static func makeDocument(for d: Deck) -> (document: PDFDocument, texts: [String])? {
         guard let src = PDFDocument(url: d.url) else { return nil }
-        guard d.layout.isTwoUp, let frames = d.layout.frames else { return src }
+        guard d.layout.isTwoUp, let frames = d.layout.frames else {
+            let texts = (0..<src.pageCount).map { src.page(at: $0)?.string ?? "" }
+            return (src, texts)
+        }
         let out = PDFDocument()
-        var n = 0
+        var texts: [String] = []
         for i in 0..<src.pageCount {
             guard let pg = src.page(at: i) else { continue }
             for f in frames where f.count == 4 {
                 let rect = CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+                let text = pg.selection(for: rect)?.string ?? ""
                 // Skip an empty bottom frame on the last page of an odd-count deck.
-                if i == src.pageCount - 1, f != frames[0], (pg.selection(for: rect)?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                if i == src.pageCount - 1, f != frames[0], text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    !Self.frameHasInk(pg, rect) {
                     continue
                 }
                 guard let copy = pg.copy() as? PDFPage else { continue }
                 copy.setBounds(rect, for: .mediaBox)
                 copy.setBounds(rect, for: .cropBox)
-                out.insert(copy, at: n)
-                n += 1
+                out.insert(copy, at: texts.count)
+                texts.append(text)
             }
         }
-        return n > 0 ? out : src
+        if texts.isEmpty { return (src, (0..<src.pageCount).map { src.page(at: $0)?.string ?? "" }) }
+        return (out, texts)
     }
 
     /// True if anything but white is drawn inside `rect` (used for slides that are pure images).
@@ -186,7 +207,10 @@ final class AppModel: ObservableObject {
         chat.showCurrent()
     }
 
-    func go(_ delta: Int) { page += delta }
+    func go(_ delta: Int) {
+        let t = min(max(page + delta, 1), max(pageCount, 1))
+        if t != page { page = t }
+    }
 
     func thumbnail(_ p: Int) -> NSImage? {
         let key = "\(deckID)#\(p)" as NSString

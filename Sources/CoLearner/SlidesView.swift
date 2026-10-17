@@ -21,11 +21,14 @@ struct SlideView: NSViewRepresentable {
     }
 
     func updateNSView(_ v: PDFView, context: Context) {
+        let want = model.page   // read first: swapping documents makes PDFView report its old page index
         if v.document !== model.document {
+            context.coordinator.swapping = true
             v.document = model.document
             v.autoScales = true
+            context.coordinator.swapping = false
         }
-        guard let doc = v.document, let target = doc.page(at: model.page - 1) else { return }
+        guard let doc = v.document, let target = doc.page(at: want - 1) else { return }
         if v.currentPage !== target { v.go(to: target) }
     }
 
@@ -34,11 +37,14 @@ struct SlideView: NSViewRepresentable {
     final class Coordinator: NSObject {
         let model: AppModel
         weak var view: PDFView?
+        var swapping = false
         init(model: AppModel) { self.model = model }
 
         @MainActor @objc func pageChanged(_ n: Notification) {
-            guard let v = view, let doc = v.document, let p = v.currentPage else { return }
-            let idx = doc.index(for: p) + 1
+            guard !swapping, let v = view, let doc = v.document, let p = v.currentPage, doc === model.document else { return }
+            let i = doc.index(for: p)
+            guard i != NSNotFound else { return }
+            let idx = i + 1
             if idx != model.page { model.page = idx }
         }
     }

@@ -117,6 +117,12 @@ final class ProcessRunner: @unchecked Sendable {
         stdinQueue.async { try? h.close() }
     }
 
+    /// For app quit: no grace period (the delayed escalation in cancel() would never run).
+    func terminateNow() {
+        lock.lock(); cancelled = true; lock.unlock()
+        if process.isRunning { process.terminate() }
+    }
+
     func cancel() {
         lock.lock(); cancelled = true; lock.unlock()
         guard process.isRunning else { return }

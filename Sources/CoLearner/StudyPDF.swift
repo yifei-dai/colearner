@@ -14,15 +14,19 @@ final class StudyPDFController: ObservableObject {
     }()
     @Published private(set) var status: String?
     private var path: String?
+    private var mapDeck: String?
     private var map: [Int: Int] = [:]
 
     func show(_ page: StudyPage, deckFile: String, slide: Int, follow: Bool) {
-        if page.path != path {
+        let fileChanged = page.path != path
+        if fileChanged {
             path = page.path
             view.document = PDFDocument(url: URL(fileURLWithPath: page.path))
+        }
+        // One notes file covers two decks (03a and 03b): the map belongs to the (file, deck) pair.
+        if fileChanged || deckFile != mapDeck || map.isEmpty {
             map = ScribeMap.pages(notes: page.path, deckFile: deckFile)
-        } else if map.isEmpty {
-            map = ScribeMap.pages(notes: page.path, deckFile: deckFile)
+            mapDeck = deckFile
         }
         guard follow else { return }
         guard let doc = view.document, let hit = ScribeMap.page(for: slide, in: map), let target = doc.page(at: hit.page - 1) else {
@@ -32,7 +36,4 @@ final class StudyPDFController: ObservableObject {
         status = hit.exact ? "Notes page \(hit.page) shows slide \(slide)" : "Notes page \(hit.page) (nearest slide shown before \(slide))"
         if view.currentPage !== target { view.go(to: target) }
     }
-
-    /// Keep the mapping fresh when another deck uses the same notes file.
-    func reset() { path = nil; map = [:]; status = nil }
 }

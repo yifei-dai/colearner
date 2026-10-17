@@ -21,7 +21,10 @@ enum BackendEvent {
     case failed(String)
 }
 
-protocol RunHandle: AnyObject { func cancel() }
+protocol RunHandle: AnyObject {
+    func cancel()
+    func terminateNow()
+}
 extension ProcessRunner: RunHandle {}
 
 @MainActor
@@ -96,6 +99,14 @@ final class CodexBackend: Backend {
         return s[r].split(separator: ".").compactMap { Int($0) }
     }
 
+    static func withHint(_ e: String) -> String {
+        let l = e.lowercased()
+        if l.contains("401") || l.contains("unauthorized") || l.contains("login") || l.contains("not logged in") {
+            return e + "\n\nFix: open Terminal, run `codex login`, then ask again."
+        }
+        return e
+    }
+
     private var cached: URL??
     init() {
         DispatchQueue.global(qos: .utility).async {
@@ -112,7 +123,7 @@ final class CodexBackend: Backend {
 
     func start(_ req: BackendRequest, onEvent: @escaping @MainActor (BackendEvent) -> Void) -> RunHandle? {
         guard let bin = binary else {
-            onEvent(.failed("Codex CLI not found. Install it (npm i -g @openai/codex) and run `codex login`, or set its path in Settings."))
+            onEvent(.failed("Codex CLI not found. Install it (npm i -g @openai/codex), run `codex login` in Terminal, then restart Co-learner."))
             return nil
         }
         let work = AppPaths.support.appendingPathComponent("codex-work", isDirectory: true)
@@ -159,6 +170,7 @@ final class CodexBackend: Backend {
                     }
                 case "turn.completed":
                     completed = true
+                    failure = nil   // an earlier "error" line (e.g. a stream retry) was not fatal
                 case "turn.failed":
                     let e = (o["error"] as? [String: Any])?["message"] as? String ?? "Codex turn failed"
                     failure = humanError(e)
@@ -170,7 +182,7 @@ final class CodexBackend: Backend {
             },
             onExit: { status, stderr, cancelled in
                 if cancelled { onEvent(.finished); return }
-                if let failure { onEvent(.failed(failure)); return }
+                if let failure { onEvent(.failed(Self.withHint(failure))); return }
                 if completed || !messages.isEmpty { onEvent(.finished); return }
                 let tail = stderr.split(separator: "\n").suffix(6).joined(separator: "\n")
                 onEvent(.failed("Codex exited (status \(status)) without an answer.\n\(tail)"))
@@ -257,9 +269,15 @@ final class ClaudeBackend: Backend {
         return best
     }
 
-    var versionString: String { located.map { $0.1.map(String.init).joined(separator: ".") } ?? "not found" }
+    /// For Settings: never probes on the main thread.
+    var versionString: String {
+        guard let c = cached else { return "checking…" }
+        return c.map { $0.1.map(String.init).joined(separator: ".") } ?? "not found"
+    }
 
     func start(_ req: BackendRequest, onEvent: @escaping @MainActor (BackendEvent) -> Void) -> RunHandle? {
+        // The desktop app prunes old versions; if ours vanished, look again.
+        if let c = cached, let (u, _) = c, !FileManager.default.isExecutableFile(atPath: u.path) { cached = nil }
         guard let (bin, ver) = located else {
             onEvent(.failed("Claude Code not found. Install it or open the Claude desktop app once, then restart Co-learner."))
             return nil
@@ -276,7 +294,10 @@ final class ClaudeBackend: Backend {
         var args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages",
                     "--model", model, "--effort", UserDefaults.standard.string(forKey: "claudeEffort") ?? "medium",
-                    "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob",
+                    "--tools", "Read,Grep,Glob",
+                    // Read works on any path in -p mode; these deny rules keep Claude out of the handwritten scans.
+                    "--disallowedTools", "Read(//**/*inclass*)", "Read(//**/*_scribing_*.pdf)",
+                    "Grep(//**/*inclass*)", "Grep(//**/*_scribing_*.pdf)",
                     "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands",
                     "--system-prompt", req.instructions]
         for d in req.readableDirs { args += ["--add-dir", d.path] }
@@ -303,9 +324,10 @@ final class ClaudeBackend: Backend {
         env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
 
         var text = ""
+        var segmentStart = 0          // where the current API message's text began (character offset)
         var gotResult = false
         var failure: String?
-        var runnerRef: ProcessRunner?
+        weak var runnerRef: ProcessRunner?
         let runner = ProcessRunner(
             executable: bin, arguments: args, cwd: cwd, environment: env,
             onLine: { line in
@@ -318,9 +340,20 @@ final class ClaudeBackend: Backend {
                     }
                 case "stream_event":
                     guard let ev = o["event"] as? [String: Any], let et = ev["type"] as? String else { return }
-                    if et == "message_start", !text.isEmpty, !text.hasSuffix("\n\n") {
-                        text += "\n\n"   // a new message after a tool call starts a new paragraph
-                        onEvent(.delta("\n\n"))
+                    if et == "message_start" {
+                        if !text.isEmpty, !text.hasSuffix("\n\n") {
+                            text += "\n\n"   // a new message after a tool call starts a new paragraph
+                            onEvent(.delta("\n\n"))
+                        }
+                        segmentStart = text.count
+                    } else if et == "message_delta", let d = ev["delta"] as? [String: Any],
+                              (d["stop_reason"] as? String) == "tool_use" {
+                        // Drop a short "let me check the notes" lead-in before a tool call; keep real content.
+                        let seg = String(text.dropFirst(segmentStart))
+                        if !seg.isEmpty, seg.trimmingCharacters(in: .whitespacesAndNewlines).count < 240 {
+                            text = String(text.prefix(segmentStart))
+                            onEvent(.replace(text))
+                        }
                     } else if et == "content_block_start", let cb = ev["content_block"] as? [String: Any] {
                         switch cb["type"] as? String {
                         case "thinking", "redacted_thinking": onEvent(.activity("thinking…"))
@@ -352,8 +385,9 @@ final class ClaudeBackend: Backend {
                         var msg = (o["result"] as? String) ?? ((o["errors"] as? [String])?.joined(separator: "\n") ?? subtype)
                         if let r = msg.range(of: "API Error: ") { msg = humanError(String(msg[r.upperBound...]).replacingOccurrences(of: #"^\d{3} "#, with: "", options: .regularExpression)) }
                         failure = msg
-                    } else if let final = o["result"] as? String, !final.isEmpty, final.count >= text.count / 3 {
-                        // The result is the last text block; prefer it over earlier "let me check…" lines.
+                    } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                              let final = o["result"] as? String, !final.isEmpty {
+                        // Nothing streamed (shouldn't happen with partial messages on): use the final text.
                         text = final
                         onEvent(.replace(final))
                     }
@@ -363,7 +397,7 @@ final class ClaudeBackend: Backend {
             },
             onExit: { status, stderr, cancelled in
                 if cancelled { onEvent(.finished); return }
-                if let failure { onEvent(.failed(failure)); return }
+                if let failure { onEvent(.failed(Self.withHint(failure))); return }
                 if gotResult { onEvent(.finished); return }
                 let tail = stderr.split(separator: "\n").suffix(6).joined(separator: "\n")
                 onEvent(.failed(text.isEmpty ? "Claude exited (status \(status)) without an answer.\n\(tail)" : "The answer was cut off (status \(status)).\n\(tail)"))
@@ -376,6 +410,14 @@ final class ClaudeBackend: Backend {
             return nil
         }
         return runner
+    }
+
+    static func withHint(_ e: String) -> String {
+        let l = e.lowercased()
+        if l.contains("/login") || l.contains("not logged in") || l.contains("authentication") || l.contains("oauth") || l.contains("401") {
+            return e + "\n\nFix: open Terminal, run `claude`, type /login and sign in, then ask again here."
+        }
+        return e
     }
 
     static func prettyModel(_ id: String) -> String {

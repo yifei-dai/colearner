@@ -132,6 +132,10 @@ struct WelcomeView: View {
                 Text("Co-learner").font(.largeTitle.bold())
                 Text("Pick a lecture. Ask about the slide you're on; the slide goes with your question.")
                     .foregroundStyle(.secondary)
+                if model.folderAccessDenied {
+                    Text("Co-learner can't read your course folders on the Desktop. Allow it in System Settings › Privacy & Security › Files & Folders (Co-learner › Desktop Folder), then choose Lectures › Reload library.")
+                        .foregroundStyle(.red)
+                }
                 ForEach(model.courses) { c in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(c.name).font(.headline)

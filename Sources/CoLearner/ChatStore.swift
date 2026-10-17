@@ -40,6 +40,8 @@ struct ChatThread: Codable {
     var messages: [ChatMessage] = []
     var claudeSession: String?
     var codexSession: String?
+    /// provider -> ids of the messages that provider has been shown (its own session, or quoted to it).
+    var seenBy: [String: [String]]?
 
     func session(for p: Provider) -> String? { p == .claude ? claudeSession : codexSession }
     mutating func setSession(_ s: String?, for p: Provider) {
@@ -69,7 +71,9 @@ final class ChatStore {
         var chats = DeckChats(deckPath: deckPath)
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        if let data = try? Data(contentsOf: fileURL(deckPath)), let c = try? dec.decode(DeckChats.self, from: data) {
+        let url = fileURL(deckPath)
+        if let data = try? Data(contentsOf: url) {
+          if let c = try? dec.decode(DeckChats.self, from: data) {
             chats = c
             // A crash or quit mid-answer leaves "streaming" messages behind; close them.
             for (k, var t) in chats.threads {
@@ -81,6 +85,13 @@ final class ChatStore {
                 }
                 if changed { chats.threads[k] = t }
             }
+          } else {
+            // Never overwrite a chat file we can't read (e.g. written by a newer version): set it aside.
+            let stamp = Int(Date().timeIntervalSince1970)
+            let aside = url.deletingPathExtension().appendingPathExtension("unreadable-\(stamp).json")
+            try? FileManager.default.moveItem(at: url, to: aside)
+            NSLog("Co-learner: could not read \(url.path); moved it to \(aside.lastPathComponent)")
+          }
         }
         decks[deckPath] = chats
         return chats

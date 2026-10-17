@@ -53,8 +53,14 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  // Busy = an assistant you are about to ask is still answering. In Both mode Claude usually finishes
+  // first; a follow-up to Claude alone shouldn't have to wait for ChatGPT.
+  function asking() {
+    return state.provider === "both" ? ["claude", "codex"] : [state.provider];
+  }
   function busy() {
-    return state.messages.some((m) => m.role === "assistant" && m.status === "streaming");
+    const who = asking();
+    return state.messages.some((m) => m.role === "assistant" && m.status === "streaming" && who.includes(m.provider));
   }
 
   function renderHeader() {
@@ -123,7 +129,7 @@
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts allow-modals");
     frame.dataset.fid = id;
-    frame.style.height = "260px";
+    frame.style.height = "200px";
     const doc = visualDoc(code, lang, id);
     frame.srcdoc = doc;
     const pre = document.createElement("pre");
@@ -139,16 +145,22 @@
   }
 
   function visualDoc(code, lang, id) {
+    // Reports the content height to the chat so the frame fits it. Layouts sized to the viewport
+    // (100vh, innerHeight) would grow with every report, so after a few growth steps the size freezes.
     const reporter =
-      "<script>(function(){var last=0;function r(){var h=Math.ceil(Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0));" +
-      "if(Math.abs(h-last)>4){last=h;parent.postMessage({clFrame:" + JSON.stringify(id) + ",h:h},'*');}}" +
+      "<script>(function(){var last=0,grows=0;function h(){var b=document.body;if(!b)return 0;" +
+      "var r=b.getBoundingClientRect(),cs=getComputedStyle(b);" +
+      "return Math.ceil(r.height+parseFloat(cs.marginTop)+parseFloat(cs.marginBottom));}" +
+      "function r(){var v=h();if(!v||Math.abs(v-last)<=4)return;if(v>last&&last>0&&++grows>6)return;" +
+      "last=v;parent.postMessage({clFrame:" + JSON.stringify(id) + ",h:v},'*');}" +
       "addEventListener('load',r);setTimeout(r,50);setTimeout(r,400);setTimeout(r,1500);" +
-      "if(window.ResizeObserver){new ResizeObserver(r).observe(document.documentElement);}})();<\/script>";
-    const base = "<style>html,body{margin:0;padding:8px;font:14px -apple-system,Helvetica,sans-serif;background:#fff;color:#111}</style>";
+      "if(window.ResizeObserver){addEventListener('load',function(){new ResizeObserver(r).observe(document.body);});}})();<\/script>";
+    const base = "<style>html,body{margin:0;height:auto}body{padding:8px;font:14px -apple-system,Helvetica,sans-serif;background:#fff;color:#111}</style>";
     let body = code;
     if (lang === "svg" && !/<html[\s>]/i.test(code)) body = "<!doctype html><html><head>" + base + "</head><body>" + code + "</body></html>";
     if (!/<html[\s>]/i.test(body)) body = "<!doctype html><html><head><meta charset='utf-8'>" + base + "</head><body>" + body + "</body></html>";
-    if (/<head[^>]*>/i.test(body)) body = body.replace(/<head[^>]*>/i, (m) => m + "<meta charset='utf-8'>" + reporter);
+    else if (body.indexOf(base) === -1) body = body.replace(/<head(\s[^>]*)?>/i, (m) => m + base);
+    if (/<head(\s[^>]*)?>/i.test(body)) body = body.replace(/<head(\s[^>]*)?>/i, (m) => m + "<meta charset='utf-8'>" + reporter);
     else body = reporter + body;
     return body;
   }
@@ -354,9 +366,11 @@
   window.addEventListener("message", (e) => {
     const d = e.data;
     if (!d || typeof d !== "object" || !d.clFrame) return;
+    const stick = nearBottom();
     for (const f of document.querySelectorAll("iframe[data-fid]")) {
-      if (f.dataset.fid === d.clFrame) f.style.height = Math.min(Math.max(d.h, 80), 900) + "px";
+      if (f.dataset.fid === d.clFrame) f.style.height = Math.min(Math.max(d.h, 60), 900) + "px";
     }
+    if (stick) toBottom();
   });
 
   renderAll();

@@ -111,13 +111,15 @@ enum AppPaths {
 }
 
 enum Library {
-    static func load() -> [Course] {
+    /// The courses, and whether macOS refused access to any slide folder.
+    static func load() -> ([Course], Bool) {
         let fm = FileManager.default
         guard let data = try? Data(contentsOf: AppPaths.libraryJSON),
               let file = try? JSONDecoder().decode(LibraryFile.self, from: data) else {
             NSLog("Co-learner: could not read library.json at \(AppPaths.libraryJSON.path)")
-            return []
+            return ([], false)
         }
+        var denied = false
         let links = loadUserLinks()
         let overrides = file.decks ?? [:]
         var courses: [Course] = []
@@ -127,7 +129,16 @@ enum Library {
             var found: [(Deck, Double)] = []
             for dir in c.slideDirs {
                 let base = URL(fileURLWithPath: c.root).appendingPathComponent(dir)
-                guard let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else { continue }
+                let items: [URL]
+                do {
+                    items = try fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
+                } catch {
+                    if (error as NSError).code == CocoaError.fileReadNoPermission.rawValue
+                        || ((error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError)?.code == Int(EPERM) {
+                        denied = true
+                    }
+                    continue
+                }
                 for u in items where u.pathExtension.lowercased() == "pdf" {
                     let path = u.standardizedFileURL.path
                     if (c.exclude ?? []).contains(where: { path.contains($0) }) { continue }
@@ -157,7 +168,7 @@ enum Library {
             let decks = extra.map { makeDeck(path: $0, course: other, entry: overrides[$0], links: links) }
             courses.append(Course(id: "other", name: "Other PDFs", short: "Other", decks: decks))
         }
-        return courses
+        return (courses, denied)
     }
 
     private static func makeDeck(path: String, course: LibraryFile.CourseEntry, entry: LibraryFile.DeckEntry?, links: UserLinks) -> Deck {
