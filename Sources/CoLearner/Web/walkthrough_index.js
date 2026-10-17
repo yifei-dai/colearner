@@ -8,10 +8,15 @@
  *   __coLearnerWT.index({rebuild?, numbering?, ownDeck?})
  *       -> {version, family, course, numbering, ownDeck, decks:[keys], entries:[{n, anchor, id, title, kind,
  *           level, parent, aux, slides:{deck:[pdfPages]}, cites:{...}, mentions:{...}}]}
- *   __coLearnerWT.locate({file? | deck?, page})   -> {ok, match, matchedPage, anchor, title, kind, path:[titles], slides}
+ *   __coLearnerWT.locate({file? | deck?, page})
+ *       -> {ok, match, matchedPage, anchor, id, title, kind, path:[titles], slides:{deck:[pdfPages]}, deckKeys}
+ *          match: "declared" | "cited" | "mentioned"      (a section/subsection covers page N)
+ *                 "nearest-preceding"                      (N uncovered: block of the closest covered page < N)
+ *                 "page-range" | "before-first" | "deck-not-on-page"   (anchor = the page hero / top)
  *   __coLearnerWT.go({file? | deck?, page, behavior?:'auto'|'smooth', highlight?:true, pinMs?:5000})
- *       -> same as locate + {scrolled:true}
- *   __coLearnerWT.coverage({file? | deck?, pages})  -> {pages, counts:{declared,cited,mentioned,nearest,none}, byPage:[...]}
+ *       -> locate result + {scrolled}. pinMs: keep the target pinned while the layout settles (MathJax from
+ *          cdnjs, images); it always waits for MathJax (max 20 s); any wheel/touch/mouse/key stops it; -1 = off.
+ *   __coLearnerWT.coverage({file? | deck?, pages})  -> {pages, counts:{<match>: n}, byPage:[{page, match, ...}]}
  *   __coLearnerWT.deckKeyFromFile("01b-intro.pdf") -> "01b"   ("7-search.pdf" -> "L7", other names -> "")
  *
  * "page" is always the 1-based PDF page index of the deck shown in the app.
@@ -189,10 +194,9 @@
       if (dp) addSpec(e, "D", dp, NUMBERING.identity);
       if (ds) addSpec(e, "D", ds, st.conv);
       e.title = clip((head && head.textContent) || (eb && eb.textContent) || el.getAttribute("aria-label") || el.id || "", 140);
-      var tid = (el.id || "") + " " + e.title;
-      if (e.kind === "section" && /^(quiz|exam|sheet|practice|refs|references)\b/i.test(el.id || "") ||
+      /* practice / cheat-sheet sections are only used when no lecture section matches */
+      if ((e.kind === "section" && /^(quiz|exam|sheet|practice|refs|references)\b/i.test(el.id || "")) ||
           /\b(practice quiz|exam practice|cheat sheet|self-test)\b/i.test(e.title)) e.aux = true;
-      void tid;
     }
     function addSpec(e, tier, spec, conv) {
       String(spec).split(/[,\s]+/).forEach(function (part) {
@@ -483,9 +487,19 @@
     evs.forEach(function (ev) { window.addEventListener(ev, onUser, { passive: true }); });
     iv = setInterval(function () {
       var d = el.getBoundingClientRect().top - topInset();
-      if (Math.abs(d) > 3) place("auto");
+      var maxY = document.documentElement.scrollHeight - window.innerHeight;
+      if (Math.abs(d) > 3 && !(d > 0 && window.pageYOffset >= maxY - 1)) place("auto");
     }, 250);
-    to = setTimeout(cancelPin, ms);
+    /* keep pinning for ms, and in any case until MathJax (loaded async from cdnjs) has typeset, max 20 s */
+    var t0 = Date.now();
+    var mjDone = function () {
+      var M = window.MathJax;
+      if (!M || !M.startup) return !document.querySelector("script[src*='mathjax']");
+      if (M.startup.promise && !M.__clwtHooked) { M.__clwtHooked = true; M.startup.promise.then(function () { M.__clwtDone = true; }); }
+      return !!M.__clwtDone;
+    };
+    var tick = function () { if (Date.now() - t0 >= 20000 || mjDone()) cancelPin(); else to = setTimeout(tick, 400); };
+    to = setTimeout(tick, Math.max(0, ms));
     PIN = function () { alive = false; clearInterval(iv); clearTimeout(to); evs.forEach(function (ev) { window.removeEventListener(ev, onUser); }); };
     return place;
   }
@@ -523,6 +537,7 @@
     }
     var place = pinTo(vt.el, q.pinMs != null ? q.pinMs : 5000);
     place(q.behavior || "auto");
+    if (q.pinMs != null && q.pinMs < 0) cancelPin();
     res.scrolled = true;
     LAST = res;
     return res;

@@ -4,7 +4,7 @@ A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.
 
 - **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs; the strip at the bottom holds slide thumbnails.
 - **Right, Chat tab:** ask about the slide on screen. The first question on a slide sends the slide image, its text and the text of the slides around it automatically. Pick **Claude**, **ChatGPT**, or **Both** (two answers to compare).
-- **Right, Walkthrough tab:** the walkthrough or review page for this deck, scrolled to the section for the current slide.
+- **Right, Walkthrough tab:** the walkthrough or review page for this deck, scrolled to the section for the current slide. For decks with typed LaTeX notes it also offers those notes (PDF), opened at the page that shows the current slide.
 
 Each slide keeps its own conversation. Follow-ups continue the same conversation, and the slide's old Q&A is still there when you come back. An orange dot on a thumbnail means that slide has a chat.
 
@@ -20,6 +20,10 @@ Each slide keeps its own conversation. Follow-ups continue the same conversation
 | Stop an answer | the red **Stop** button |
 | Visuals | "Visualize it" answers come with a live interactive drawing; **Open in window** shows it bigger; **Code** shows the source |
 | Model and effort | Co-learner ▸ Settings (⌘,) |
+
+## First launch
+
+If a linked folder is on your Desktop, macOS asks once whether Co-learner may access files there. Click **Allow**. Because the app is not signed with a developer certificate, macOS asks again after each update.
 
 ## How it talks to Claude and ChatGPT
 
@@ -45,6 +49,8 @@ Each slide's conversation keeps one Claude session and one Codex thread, resumed
 
 - Courses whose library.json `layout` is `twoUp` (handouts with two slides per page): the app splits those PDFs so that slide numbers match the printed ones.
 - A replaced deck: library.json can hide the old deck (`"hidden": true`) and keep its walkthrough linked to the new deck through a page map (`map`).
+- Walkthrough sections are found by `Web/walkthrough_index.js`, which reads the slide references in each page (eyebrows, headings, `data-pages`, source pills) and scrolls to the most specific section for the slide.
+- Scribe-notes PDFs need no table: pdfTeX stamps each slide crop with its deck file and page (`/PTEX.FileName`, `/PTEX.PageNumber`), and `ScribeMap.swift` reads those.
 
 ## Building
 
@@ -71,7 +77,8 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 | `ProcessRunner.swift` | child processes and line-by-line output |
 | `SlideContext.swift` | slide PNG and text sent with the first question |
 | `ChatStore.swift` | chat history on disk |
-| `WalkthroughPane.swift` | walkthrough tab |
+| `WalkthroughPane.swift` | walkthrough tab (html pages) |
+| `StudyPDF.swift`, `ScribeMap.swift` | notes PDFs in the walkthrough tab, slide → notes page |
 | `Prompts.swift` | the tutor instructions |
 | `Web/` | chat page (`chat.html/css/js`, `render.js`), section indexer (`walkthrough_index.js`), vendored KaTeX, marked and DOMPurify |
 

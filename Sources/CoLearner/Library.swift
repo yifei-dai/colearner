@@ -11,6 +11,7 @@ struct StudyPage: Codable, Hashable, Identifiable {
     /// For pages written against an older version of the deck: page's PDF page ("ref") -> app slide.
     var map: [String: Int]?
     var id: String { path }
+    var isPDF: Bool { path.lowercased().hasSuffix(".pdf") }
 }
 
 /// How slides sit on the PDF pages. Some handouts put two slides on each page.

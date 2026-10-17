@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import PDFKit
 
 /// Shows the deck's walkthrough / review page and keeps it scrolled to the section for the current slide.
 @MainActor
@@ -11,6 +12,7 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
     private var page: StudyPage?
     private var pendingSlide: Int?
     private var ready = false
+    private var debounce: DispatchWorkItem?
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -42,7 +44,12 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             return
         }
-        if follow { goto(slide) }
+        guard follow else { return }
+        // Arrow-key bursts: only scroll for the slide the user stops on.
+        debounce?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.goto(slide) }
+        debounce = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: w)
     }
 
     /// The deck file name tells the indexer which deck's slides to match (one page can cover 01a and 01b).
@@ -67,7 +74,11 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if let d = result as? [String: Any], (d["ok"] as? Bool) == true {
-                    self.sectionTitle = d["title"] as? String
+                    let path = (d["path"] as? [String])?.filter { !$0.isEmpty } ?? []
+                    var t = path.isEmpty ? (d["title"] as? String ?? "") : path.joined(separator: " › ")
+                    let match = d["match"] as? String ?? ""
+                    if !["declared", "cited", "mentioned"].contains(match) { t += "  (no section for this slide; nearest one)" }
+                    self.sectionTitle = t
                 } else {
                     self.sectionTitle = nil
                 }
@@ -133,12 +144,14 @@ struct WalkthroughPane: View {
                     Image(systemName: "link.badge.plus")
                 }
                 .buttonStyle(.borderless)
-                .help("Link another walkthrough page (.html) to this deck")
+                .help("Link another walkthrough page (.html) or notes PDF to this deck")
                 .disabled(model.deck == nil)
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            if !pages.isEmpty { SectionLine(walk: model.walk) }
+            if let p = model.currentStudyPage {
+                if p.isPDF { PDFStatusLine(pdf: model.studyPDF) } else { SectionLine(walk: model.walk) }
+            }
             Divider()
             if pages.isEmpty {
                 VStack(spacing: 10) {
@@ -150,6 +163,8 @@ struct WalkthroughPane: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.currentStudyPage?.isPDF == true {
+                PDFViewHost(view: model.studyPDF.view)
             } else {
                 WebViewHost(view: model.walk.webView)
             }
@@ -162,8 +177,13 @@ struct WalkthroughPane: View {
     }
 
     private func sync() {
-        model.walk.deckFile = model.deck?.url.lastPathComponent ?? ""
-        model.walk.show(model.currentStudyPage, slide: model.page, follow: model.followSlides)
+        let deckFile = model.deck?.url.lastPathComponent ?? ""
+        if let p = model.currentStudyPage, p.isPDF {
+            model.studyPDF.show(p, deckFile: deckFile, slide: model.page, follow: model.followSlides)
+        } else {
+            model.walk.deckFile = deckFile
+            model.walk.show(model.currentStudyPage, slide: model.page, follow: model.followSlides)
+        }
     }
 }
 
@@ -180,4 +200,24 @@ private struct SectionLine: View {
             .padding(.bottom, 4)
         }
     }
+}
+
+private struct PDFStatusLine: View {
+    @ObservedObject var pdf: StudyPDFController
+    var body: some View {
+        if let s = pdf.status {
+            HStack {
+                Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 4)
+        }
+    }
+}
+
+struct PDFViewHost: NSViewRepresentable {
+    let view: PDFView
+    func makeNSView(context: Context) -> PDFView { view }
+    func updateNSView(_ nsView: PDFView, context: Context) {}
 }

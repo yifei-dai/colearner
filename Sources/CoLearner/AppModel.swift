@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
 
     lazy var chat = ChatController(model: self)
     lazy var walk = WalkthroughController()
+    lazy var studyPDF = StudyPDFController()
     private let thumbs = NSCache<NSString, NSImage>()
 
     var deckID: String { deck?.path ?? "" }
@@ -165,8 +166,8 @@ final class AppModel: ObservableObject {
     func linkStudyPagePanel() {
         guard let d = deck else { return }
         let p = NSOpenPanel()
-        p.allowedContentTypes = [.html]
-        p.message = "Choose a walkthrough or review page (.html) for \(d.title)"
+        p.allowedContentTypes = [.html, .pdf]
+        p.message = "Choose a walkthrough or review page (.html) or a notes PDF for \(d.title)"
         guard p.runModal() == .OK, let url = p.url else { return }
         var links = Library.loadUserLinks()
         var list = links.walkthroughs[d.path] ?? []
@@ -207,7 +208,16 @@ final class AppModel: ObservableObject {
         guard let d = deck else { return nil }
         let pages = d.walkthroughs
         if let sel = selectedStudyPage[d.path], let p = pages.first(where: { $0.path == sel }) { return p }
-        return pages.first
+        // A walkthrough page wins; with only notes PDFs, take the one whose slides are closest to this slide
+        // (one deck can be split across two notes files).
+        if let html = pages.first(where: { !$0.isPDF }) { return html }
+        let file = d.url.lastPathComponent
+        func distance(_ p: StudyPage) -> Int {
+            let keys = ScribeMap.pages(notes: p.path, deckFile: file).keys
+            guard let lo = keys.min(), let hi = keys.max() else { return .max }
+            return page < lo ? lo - page : (page > hi ? page - hi : 0)
+        }
+        return pages.min { distance($0) < distance($1) } ?? pages.first
     }
 
     // MARK: session
