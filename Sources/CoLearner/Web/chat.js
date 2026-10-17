@@ -104,70 +104,181 @@
     for (const c of document.querySelectorAll(".chip")) c.disabled = !state.hasDeck || isBusy;
   }
 
-  function renderPickers() {
+  // ---------- model menu and usage card (popovers) ----------
+  let pop = null; // {kind:'model', provider} | {kind:'usage'}
+  const popEl = document.createElement("div");
+  popEl.className = "pop";
+  popEl.hidden = true;
+  document.body.appendChild(popEl);
+
+  function closePop() {
+    pop = null;
+    popEl.hidden = true;
+    document.querySelectorAll(".pickbtn.open, #usage.open").forEach((b) => b.classList.remove("open"));
+  }
+  function placePop(anchor, alignRight) {
+    const r = anchor.getBoundingClientRect();
+    popEl.hidden = false;
+    const w = popEl.offsetWidth, h = popEl.offsetHeight;
+    let left = alignRight ? r.right - w : r.left;
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+    let top = r.top - h - 6;
+    if (top < 8) top = Math.min(r.bottom + 6, window.innerHeight - h - 8);
+    popEl.style.left = left + "px";
+    popEl.style.top = Math.max(8, top) + "px";
+  }
+  document.addEventListener("mousedown", (e) => {
+    if (!pop) return;
+    if (popEl.contains(e.target) || e.target.closest(".pickbtn") || e.target.closest("#usage")) return;
+    closePop();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pop) { closePop(); e.stopPropagation(); } }, true);
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function renderModelPop(p, anchor) {
+    const c = config[p];
+    if (!c) return;
+    popEl.textContent = "";
+    popEl.appendChild(el("div", "pop-title", NAMES[p] + " model"));
+    for (const m of c.models) {
+      const b = el("button", "opt" + (m.id === c.model ? " on" : ""));
+      b.appendChild(el("span", "check", m.id === c.model ? "✓" : ""));
+      const main = el("span", "opt-main");
+      main.appendChild(el("span", "opt-name", m.label));
+      if (m.detail) main.appendChild(el("span", "opt-detail", m.detail));
+      b.appendChild(main);
+      b.onclick = () => post({ type: "setModel", provider: p, model: m.id });
+      popEl.appendChild(b);
+    }
+    popEl.appendChild(el("div", "pop-title", "Effort"));
+    const seg = el("div", "seg");
+    let current = null;
+    for (const e of c.efforts) {
+      const b = el("button", e.id === c.effort ? "on" : "", e.label);
+      if (e.id === c.effort) current = e;
+      b.title = e.detail || e.label;
+      b.onclick = () => post({ type: "setEffort", provider: p, effort: e.id });
+      seg.appendChild(b);
+    }
+    popEl.appendChild(seg);
+    const hint = current && current.detail && current.id !== "medium" ? current.detail : c.hint || "";
+    if (hint) popEl.appendChild(el("div", "pop-hint", hint));
+    placePop(anchor, false);
+  }
+
+  function resetText(w) {
+    if (w.resetsAt) {
+      const d = new Date(w.resetsAt * 1000), now = new Date();
+      const mins = Math.max(0, Math.round((d - now) / 60000));
+      const rel = mins < 60 ? mins + " min" : mins < 1440 ? Math.floor(mins / 60) + " h " + (mins % 60) + " min" : Math.round(mins / 1440) + " days";
+      const abs = d.toDateString() === now.toDateString()
+        ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return "Resets in " + rel + " (" + abs + ")";
+    }
+    return w.resetsText ? "Resets " + w.resetsText : "";
+  }
+
+  function renderUsagePop(anchor) {
+    popEl.textContent = "";
+    const head = el("div", "pop-head");
+    head.appendChild(el("span", "pop-title", "Plan usage"));
+    const loading = ["claude", "codex"].some((p) => usage[p] && usage[p].loading);
+    const rb = el("button", "refresh", loading ? "Updating…" : "↻ Refresh");
+    rb.disabled = loading;
+    rb.onclick = () => post({ type: "refreshUsage", force: true });
+    head.appendChild(rb);
+    popEl.appendChild(head);
+    let newest = 0;
+    for (const p of ["claude", "codex"]) {
+      const u = usage[p];
+      const sec = el("div", "u-sec");
+      const name = el("div", "u-name " + p, NAMES[p]);
+      if (u && u.plan) name.appendChild(el("span", "plan", u.plan));
+      sec.appendChild(name);
+      if (u && u.windows && u.windows.length) {
+        for (const w of u.windows) {
+          const pct = Math.round(w.percent);
+          const row = el("div", "u-row");
+          const top = el("div", "u-top");
+          top.appendChild(el("span", "", w.title || w.label));
+          top.appendChild(el("span", "u-pct" + (pct >= 95 ? " hot" : pct >= 80 ? " warn" : ""), pct + "% used"));
+          row.appendChild(top);
+          const bar = el("div", "bar");
+          const fill = el("div", "fill" + (pct >= 95 ? " hot" : pct >= 80 ? " warn" : ""));
+          fill.style.width = Math.min(100, Math.max(0, w.percent)) + "%";
+          bar.appendChild(fill);
+          row.appendChild(bar);
+          const rt = resetText(w);
+          if (rt) row.appendChild(el("div", "u-reset", rt));
+          sec.appendChild(row);
+        }
+        newest = Math.max(newest, u.updated || 0);
+      } else {
+        sec.appendChild(el("div", "u-reset", u && u.loading ? "Checking…" : (u && u.error) || "No data yet."));
+      }
+      if (u && u.error && u.windows && u.windows.length) sec.appendChild(el("div", "u-err", "Last refresh failed: " + u.error));
+      popEl.appendChild(sec);
+    }
+    if (newest) popEl.appendChild(el("div", "u-foot", "Updated " + new Date(newest * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · also refreshed after every answer"));
+    placePop(anchor, true);
+  }
+
+  // `refreshPop`: redraw an open model menu too (when the choices changed), not on every chat update.
+  function renderPickers(refreshPop) {
     const box = $("#pickers");
     box.textContent = "";
     for (const p of asking()) {
       const c = config[p];
       if (!c) continue;
-      const wrap = document.createElement("span");
-      wrap.className = "pick " + p;
-      if (state.provider === "both") {
-        const who = document.createElement("span");
-        who.className = "who";
-        who.textContent = NAMES[p];
-        wrap.appendChild(who);
-      }
-      const mSel = document.createElement("select");
-      mSel.title = NAMES[p] + " model";
-      for (const m of c.models) {
-        const o = document.createElement("option");
-        o.value = m.id;
-        o.textContent = m.label;
-        mSel.appendChild(o);
-      }
-      mSel.value = c.model;
-      mSel.onchange = () => post({ type: "setModel", provider: p, model: mSel.value });
-      const eSel = document.createElement("select");
-      eSel.title = NAMES[p] + " effort (more effort = slower, more thorough)";
-      for (const e of c.efforts) {
-        const o = document.createElement("option");
-        o.value = e;
-        o.textContent = e;
-        eSel.appendChild(o);
-      }
-      eSel.value = c.effort;
-      eSel.onchange = () => post({ type: "setEffort", provider: p, effort: eSel.value });
-      wrap.append(mSel, eSel);
-      box.appendChild(wrap);
+      const m = c.models.find((x) => x.id === c.model);
+      const e = c.efforts.find((x) => x.id === c.effort);
+      const b = el("button", "pickbtn " + p + (pop && pop.kind === "model" && pop.provider === p ? " open" : ""));
+      b.appendChild(el("span", "dot"));
+      b.appendChild(el("span", "pk-model", m ? m.label : c.model));
+      b.appendChild(el("span", "pk-effort", e ? e.label : c.effort));
+      b.appendChild(el("span", "chev", "⌄"));
+      b.title = NAMES[p] + ": choose model and effort";
+      b.onclick = () => {
+        if (pop && pop.kind === "model" && pop.provider === p) { closePop(); return; }
+        pop = { kind: "model", provider: p };
+        renderModelPop(p, b);
+        renderPickers();
+      };
+      box.appendChild(b);
+    }
+    if (pop && pop.kind === "model") {
+      const anchor = box.querySelector(".pickbtn." + pop.provider);
+      if (!anchor || !config[pop.provider]) closePop();
+      else if (refreshPop) renderModelPop(pop.provider, anchor);
     }
   }
 
   function renderUsage() {
     const box = $("#usage");
     box.textContent = "";
+    let any = false;
     for (const p of ["claude", "codex"]) {
       const u = usage[p];
       if (!u || !u.windows || !u.windows.length) continue;
-      const span = document.createElement("span");
-      span.className = "u";
-      const b = document.createElement("b");
-      b.textContent = NAMES[p] + " ";
-      span.appendChild(b);
-      const tips = [];
-      u.windows.forEach((w, i) => {
+      any = true;
+      const span = el("span", "u");
+      span.appendChild(el("b", "", NAMES[p] + " "));
+      u.windows.slice(0, 2).forEach((w, i) => {
         const pct = Math.round(w.percent);
-        const part = document.createElement("span");
-        part.textContent = (i ? " · " : "") + w.label + " " + pct + "%";
-        if (pct >= 95) part.className = "hot";
-        else if (pct >= 80) part.className = "warn";
-        span.appendChild(part);
-        if (w.resetsAt) tips.push(w.label + " resets " + new Date(w.resetsAt * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }));
+        span.appendChild(el("span", pct >= 95 ? "hot" : pct >= 80 ? "warn" : "", (i ? " · " : "") + w.label + " " + pct + "%"));
       });
-      if (u.updated) tips.push("as of " + new Date(u.updated * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-      span.title = NAMES[p] + " plan usage: " + tips.join("; ");
       box.appendChild(span);
     }
+    if (!any) box.appendChild(el("span", "", "Usage"));
+    box.appendChild(el("span", "chev", "⌃"));
+    if (pop && pop.kind === "usage") renderUsagePop(box);
   }
 
   function emptyState() {
@@ -388,7 +499,7 @@
     },
     setConfig(c) {
       config = c || {};
-      renderPickers();
+      renderPickers(true);
     },
     setUsage(u) {
       usage = u || {};
@@ -454,6 +565,14 @@
       post({ type: "setProvider", provider: b.dataset.p });
     };
   $("#btn-clear").onclick = () => post({ type: "clearThread" });
+  $("#usage").onclick = () => {
+    const box = $("#usage");
+    if (pop && pop.kind === "usage") { closePop(); return; }
+    pop = { kind: "usage" };
+    box.classList.add("open");
+    renderUsagePop(box);
+    post({ type: "refreshUsage", force: false });
+  };
 
   window.addEventListener("message", (e) => {
     const d = e.data;

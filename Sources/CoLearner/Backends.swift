@@ -115,6 +115,9 @@ final class CodexBackend: Backend {
             DispatchQueue.main.async { MainActor.assumeIsolated { if self.cached == nil { self.cached = .some(u) } } }
         }
     }
+    /// Without probing: nil = not known yet (the launch-time lookup is still running).
+    var knownBinary: URL?? { cached }
+
     var binary: URL? {
         if let c = cached { return c }
         let u = Self.locate()
@@ -268,6 +271,9 @@ final class ClaudeBackend: Backend {
             DispatchQueue.main.async { MainActor.assumeIsolated { if self.cached == nil { self.cached = .some(best) } } }
         }
     }
+    /// Without probing: nil = not known yet (the launch-time lookup is still running).
+    var knownLocation: (URL, [Int])?? { cached }
+
     var located: (URL, [Int])? {
         if let c = cached { return c }
         let best = Self.candidates().max { $0.1.lexicographicallyPrecedes($1.1) }
@@ -322,13 +328,7 @@ final class ClaudeBackend: Backend {
         }
         line.append(0x0A)
 
-        var env = ToolLocator.environment(addingDirsOf: [bin])
-        for k in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"] { env.removeValue(forKey: k) }
-        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-        env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
-        env["DISABLE_AUTOUPDATER"] = "1"
-        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+        let env = Self.environment(bin)
 
         var text = ""
         var segmentStart = 0          // where the current API message's text began (character offset)
@@ -422,6 +422,24 @@ final class ClaudeBackend: Backend {
             return nil
         }
         return runner
+    }
+
+    /// Subscription login only (no API keys), no memory/CLAUDE.md, no updater or MCP connectors.
+    nonisolated static func environment(_ bin: URL) -> [String: String] {
+        var env = ToolLocator.environment(addingDirsOf: [bin])
+        for k in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"] { env.removeValue(forKey: k) }
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+        env["DISABLE_AUTOUPDATER"] = "1"
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+        return env
+    }
+
+    static var workingDirectory: URL {
+        let cwd = AppPaths.support.appendingPathComponent("claude-cwd", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+        return cwd
     }
 
     static func withHint(_ e: String) -> String {

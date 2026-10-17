@@ -15,8 +15,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var runWhere: [String: (deck: String, page: Int)] = [:]
     private var dirty: [String: ChatMessage] = [:]
     private var flushScheduled = false
-    /// Last plan usage each CLI reported (kept across launches).
-    private var usage: [Provider: (windows: [UsageWindow], updated: Double)] = [:]
+    /// Last plan usage per assistant (kept across launches). Updated after every answer and on demand.
+    private struct Usage { var plan: String?; var windows: [UsageWindow]; var updated: Double; var loading = false; var error: String? }
+    private var usage: [Provider: Usage] = [:]
 
     init(model: AppModel) {
         self.model = model
@@ -44,8 +45,14 @@ final class ChatController: NSObject, WKNavigationDelegate {
     func pushConfig() {
         func entry(_ p: Provider, _ id: String, _ effort: String) -> [String: Any] {
             let models = ModelCatalog.list(p)
-            let efforts = ModelCatalog.model(p, id)?.efforts ?? models.first?.efforts ?? []
-            return ["models": models.map { ["id": $0.id, "label": $0.label] }, "model": id, "efforts": efforts, "effort": effort]
+            let m = ModelCatalog.model(p, id) ?? models.first
+            return [
+                "models": models.map { ["id": $0.id, "label": $0.label, "detail": $0.detail] },
+                "model": id,
+                "efforts": (m?.effortInfo ?? []).map { ["id": $0.id, "label": $0.label, "detail": $0.detail] },
+                "effort": effort,
+                "hint": ModelCatalog.effortHint,
+            ]
         }
         js("setConfig", ["claude": entry(.claude, model.claudeModel, model.claudeEffort),
                          "codex": entry(.codex, model.codexModel, model.codexEffort)])
@@ -55,32 +62,103 @@ final class ChatController: NSObject, WKNavigationDelegate {
         for p in Provider.allCases {
             if let d = UserDefaults.standard.data(forKey: "usage.\(p.rawValue)"),
                let w = try? JSONDecoder().decode([UsageWindow].self, from: d) {
-                usage[p] = (w, UserDefaults.standard.double(forKey: "usage.\(p.rawValue).at"))
+                usage[p] = Usage(plan: UserDefaults.standard.string(forKey: "usage.\(p.rawValue).plan"), windows: w,
+                                 updated: UserDefaults.standard.double(forKey: "usage.\(p.rawValue).at"))
             }
         }
         pushUsage()
-        // Codex keeps its latest limits in its session logs, so it can be shown before the first question.
-        DispatchQueue.global(qos: .utility).async {
-            let w = UsageWindow.latestCodex(thread: nil)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if !w.isEmpty, self.usage[.codex] == nil { self.setUsage(.codex, w) }
+        refreshUsage(force: false)
+    }
+
+    /// Asks both tools for their current limits (no model is called). Skipped if fetched in the last 2 minutes.
+    func refreshUsage(force: Bool) {
+        let now = Date().timeIntervalSince1970
+        for p in Provider.allCases {
+            if usage[p]?.loading == true { continue }
+            if !force, let u = usage[p], now - u.updated < 120, !u.windows.isEmpty { continue }
+            var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
+            u.loading = true
+            usage[p] = u
+            switch p {
+            case .claude:
+                // Never probe for the binary on the main thread; right after launch the lookup may still be running.
+                let known = claude.knownLocation
+                let cwd = ClaudeBackend.workingDirectory
+                DispatchQueue.global(qos: .utility).async {
+                    let loc: (URL, [Int])? = known ?? ClaudeBackend.candidates().max { $0.1.lexicographicallyPrecedes($1.1) }
+                    let r = loc.map { UsageFetcher.claude(bin: $0.0, env: ClaudeBackend.environment($0.0), cwd: cwd) }
+                        ?? .init(plan: nil, windows: [], error: "Claude Code not found.")
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self.finishUsage(p, r) } }
+                }
+            case .codex:
+                let known = codex.knownBinary
+                DispatchQueue.global(qos: .utility).async {
+                    guard let bin = known ?? CodexBackend.locate() else {
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self.finishUsage(p, .init(plan: nil, windows: [], error: "Codex CLI not found.")) } }
+                        return
+                    }
+                    var r = UsageFetcher.codex(bin: bin, env: ToolLocator.environment(addingDirsOf: [bin]))
+                    if r.windows.isEmpty {   // fall back to the last limits Codex logged
+                        let logged = UsageWindow.latestCodex(thread: nil)
+                        if !logged.isEmpty { r = .init(plan: r.plan, windows: logged, error: nil) }
+                    }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self.finishUsage(p, r) } }
                 }
             }
         }
+        pushUsage()
     }
 
-    private func setUsage(_ p: Provider, _ w: [UsageWindow]) {
-        let now = Date().timeIntervalSince1970
-        usage[p] = (w, now)
-        if let d = try? JSONEncoder().encode(w) { UserDefaults.standard.set(d, forKey: "usage.\(p.rawValue)") }
-        UserDefaults.standard.set(now, forKey: "usage.\(p.rawValue).at")
+    private func finishUsage(_ p: Provider, _ r: UsageFetcher.Result) {
+        var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
+        u.loading = false
+        if r.windows.isEmpty {
+            u.error = r.error
+        } else {
+            u.windows = r.windows
+            u.updated = Date().timeIntervalSince1970
+            u.error = nil
+        }
+        if let plan = r.plan { u.plan = plan }
+        usage[p] = u
+        saveUsage(p)
         pushUsage()
+    }
+
+    /// After an answer: the tool reported some windows; update those, keep the rest (e.g. Fable's week).
+    private func setUsage(_ p: Provider, _ w: [UsageWindow]) {
+        var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
+        for nw in w {
+            if let i = u.windows.firstIndex(where: { $0.label == nw.label }) {
+                var merged = nw
+                if merged.title == nil { merged.title = u.windows[i].title }
+                u.windows[i] = merged
+            } else {
+                u.windows.append(nw)
+            }
+        }
+        u.updated = Date().timeIntervalSince1970
+        u.error = nil
+        usage[p] = u
+        saveUsage(p)
+        pushUsage()
+    }
+
+    private func saveUsage(_ p: Provider) {
+        guard let u = usage[p] else { return }
+        if let d = try? JSONEncoder().encode(u.windows) { UserDefaults.standard.set(d, forKey: "usage.\(p.rawValue)") }
+        UserDefaults.standard.set(u.updated, forKey: "usage.\(p.rawValue).at")
+        if let plan = u.plan { UserDefaults.standard.set(plan, forKey: "usage.\(p.rawValue).plan") }
     }
 
     private func pushUsage() {
         var d: [String: Any] = [:]
-        for (p, u) in usage { d[p.rawValue] = ["windows": u.windows.map(\.js), "updated": u.updated] }
+        for (p, u) in usage {
+            var e: [String: Any] = ["windows": u.windows.map(\.js), "updated": u.updated, "loading": u.loading]
+            if let plan = u.plan { e["plan"] = plan }
+            if let err = u.error { e["error"] = err }
+            d[p.rawValue] = e
+        }
         js("setUsage", d)
     }
 
@@ -141,6 +219,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let m = body["model"] as? String,
                   ModelCatalog.model(p, m) != nil else { return }
             if p == .claude { model.claudeModel = m } else { model.codexModel = m }
+        case "refreshUsage":
+            refreshUsage(force: body["force"] as? Bool ?? false)
         case "setEffort":
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let e = body["effort"] as? String else { return }
             if p == .claude { model.claudeEffort = e } else { model.codexEffort = e }
