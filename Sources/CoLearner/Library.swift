@@ -54,6 +54,10 @@ private struct LibraryFile: Codable {
         var slideDirs: [String]
         var exclude: [String]?
         var layout: SlideLayout?
+        /// Folders searched for walkthrough pages and notes PDFs (StudyDiscovery).
+        var studyDirs: [String]?
+        /// How discovered pages number their slides ("identity" for 2-up handouts, which the app splits).
+        var studyNumbering: String?
     }
     struct DeckEntry: Codable {
         var title: String?
@@ -158,13 +162,28 @@ enum Library {
                 if a.1 != b.1 { return a.1 < b.1 }
                 return a.0.title.localizedStandardCompare(b.0.title) == .orderedAscending
             }
+            // Study pages made after library.json was written: found by looking, added after the listed ones.
+            if let dirs = c.studyDirs, !dirs.isEmpty {
+                let extra = StudyDiscovery.scan(root: c.root, dirs: dirs, numbering: c.studyNumbering, decks: found.map(\.0))
+                for i in found.indices {
+                    var d = found[i].0
+                    for p in extra.pages[d.path] ?? [] where !d.walkthroughs.contains(where: { $0.path == p.path }) {
+                        d.walkthroughs.append(p)
+                    }
+                    for f in extra.context[d.path] ?? [] where !d.contextFiles.contains(f) { d.contextFiles.append(f) }
+                    // Walkthrough pages before notes PDFs, keeping each group's order.
+                    d.walkthroughs = d.walkthroughs.filter { !$0.isPDF } + d.walkthroughs.filter(\.isPDF)
+                    found[i].0 = d
+                }
+            }
             courses.append(Course(id: c.id, name: c.name, short: c.short, decks: found.map { $0.0 }))
         }
 
         // PDFs opened by hand with "Open PDF…".
         let extra = links.extraDecks.filter { !seen.contains($0) && fm.fileExists(atPath: $0) }
         if !extra.isEmpty {
-            let other = LibraryFile.CourseEntry(id: "other", name: "Other PDFs", short: "Other", root: "/", slideDirs: [], exclude: nil, layout: nil)
+            let other = LibraryFile.CourseEntry(id: "other", name: "Other PDFs", short: "Other", root: "/", slideDirs: [],
+                                                exclude: nil, layout: nil, studyDirs: nil, studyNumbering: nil)
             let decks = extra.map { makeDeck(path: $0, course: other, entry: overrides[$0], links: links) }
             courses.append(Course(id: "other", name: "Other PDFs", short: "Other", decks: decks))
         }
