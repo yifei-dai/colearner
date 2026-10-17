@@ -69,7 +69,7 @@ struct SettingsView: View {
         Form {
             Section("Claude") {
                 Picker("Model", selection: $model.claudeModel) {
-                    ForEach(ModelCatalog.claude, id: \.id) { Text($0.label).tag($0.id) }
+                    ForEach(ModelCatalog.list(.claude).filter { !ModelCatalog.shared.isHidden(.claude, $0.id) || $0.id == model.claudeModel }, id: \.id) { Text($0.label).tag($0.id) }
                 }
                 Picker("Effort", selection: $model.claudeEffort) {
                     ForEach(ModelCatalog.model(.claude, model.claudeModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
@@ -78,7 +78,7 @@ struct SettingsView: View {
             }
             Section("ChatGPT (Codex)") {
                 Picker("Model", selection: $model.codexModel) {
-                    ForEach(ModelCatalog.codex, id: \.id) { Text($0.label).tag($0.id) }
+                    ForEach(ModelCatalog.list(.codex).filter { !ModelCatalog.shared.isHidden(.codex, $0.id) || $0.id == model.codexModel }, id: \.id) { Text($0.label).tag($0.id) }
                 }
                 Picker("Reasoning effort", selection: $model.codexEffort) {
                     ForEach(ModelCatalog.model(.codex, model.codexModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }

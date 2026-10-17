@@ -63,11 +63,26 @@ final class AppModel: ObservableObject {
 
     init() {
         // v0.1 stored "" for "default Claude model".
-        if ModelCatalog.model(.claude, claudeModel) == nil { claudeModel = "opus" }
-        if ModelCatalog.model(.codex, codexModel) == nil { codexModel = ModelCatalog.codex.first?.id ?? CodexBackend.defaultModel }
+        ensureModelChoices()
         reloadLibrary()
         restoreSession()
         installArrowKeys()
+    }
+
+    /// The chosen models must exist and be shown in the menu; otherwise take the first one shown.
+    /// Runs at launch and whenever the model lists refresh (a model can disappear or be hidden).
+    func ensureModelChoices() {
+        let cat = ModelCatalog.shared
+        // If the lists changed so that every model is hidden, show the first one again.
+        for p in Provider.allCases where cat.visible(p).isEmpty {
+            if let f = ModelCatalog.list(p).first { cat.setHidden(p, f.id, false) }
+        }
+        if ModelCatalog.model(.claude, claudeModel) == nil || cat.isHidden(.claude, claudeModel),
+           let first = cat.visible(.claude).first { claudeModel = first.id }
+        if ModelCatalog.model(.codex, codexModel) == nil || cat.isHidden(.codex, codexModel),
+           let first = cat.visible(.codex).first { codexModel = first.id }
+        if let m = ModelCatalog.model(.claude, claudeModel), !m.efforts.contains(claudeEffort) { claudeEffort = m.defaultEffort }
+        if let m = ModelCatalog.model(.codex, codexModel), !m.efforts.contains(codexEffort) { codexEffort = m.defaultEffort }
     }
 
     /// ← and → turn slides anywhere in the window, except while typing in a text box or using a visual.

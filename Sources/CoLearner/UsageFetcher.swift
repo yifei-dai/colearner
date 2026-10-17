@@ -98,7 +98,7 @@ enum UsageFetcher {
 
     /// Runs a tool and returns its stdout. With `stopWhen`, reads line by line and ends the process as soon as
     /// a line satisfies it (for servers that don't exit on their own).
-    nonisolated private static func run(_ exe: URL, _ args: [String], env: [String: String], cwd: URL?,
+    nonisolated static func run(_ exe: URL, _ args: [String], env: [String: String], cwd: URL?,
                                         stdin: Data? = nil, keepStdinOpen: Bool = false, timeout: TimeInterval,
                                         stopWhen: ((String) -> Bool)? = nil) -> String {
         let p = Process()

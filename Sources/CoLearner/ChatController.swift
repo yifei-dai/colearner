@@ -43,19 +43,33 @@ final class ChatController: NSObject, WKNavigationDelegate {
     // MARK: model pickers and usage
 
     func pushConfig() {
+        let cat = ModelCatalog.shared
         func entry(_ p: Provider, _ id: String, _ effort: String) -> [String: Any] {
             let models = ModelCatalog.list(p)
             let m = ModelCatalog.model(p, id) ?? models.first
             return [
-                "models": models.map { ["id": $0.id, "label": $0.label, "detail": $0.detail] },
+                "models": models.map { ["id": $0.id, "label": $0.label, "hidden": cat.isHidden(p, $0.id), "isNew": cat.isNew(p, $0.id)] },
                 "model": id,
-                "efforts": (m?.effortInfo ?? []).map { ["id": $0.id, "label": $0.label, "detail": $0.detail] },
+                "efforts": (m?.effortInfo ?? []).map { ["id": $0.id, "label": $0.label] },
                 "effort": effort,
                 "hint": ModelCatalog.effortHint,
+                "updated": cat.updated[p] ?? 0,
+                "refreshing": cat.refreshing,
             ]
         }
         js("setConfig", ["claude": entry(.claude, model.claudeModel, model.claudeEffort),
                          "codex": entry(.codex, model.codexModel, model.codexEffort)])
+    }
+
+    /// Fresh model lists from both tools (also run at every launch). New models appear in the menu by themselves.
+    func refreshModels() {
+        let cat = ModelCatalog.shared
+        cat.onChange = { [weak self] in
+            guard let self else { return }
+            self.model.ensureModelChoices()
+            self.pushConfig()
+        }
+        cat.refresh(claudeBin: claude.knownLocation, codexBin: codex.knownBinary)
     }
 
     private func loadUsage() {
@@ -213,12 +227,23 @@ final class ChatController: NSObject, WKNavigationDelegate {
             showCurrent()
             pushConfig()
             loadUsage()
+            refreshModels()
         case "turn":
             if let d = body["delta"] as? Int { model.go(d) }
         case "setModel":
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let m = body["model"] as? String,
                   ModelCatalog.model(p, m) != nil else { return }
             if p == .claude { model.claudeModel = m } else { model.codexModel = m }
+        case "setModelVisible":
+            guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let m = body["model"] as? String else { return }
+            let show = body["visible"] as? Bool ?? true
+            ModelCatalog.shared.setHidden(p, m, !show)
+            model.ensureModelChoices()   // hiding the model in use switches to the first one shown
+            pushConfig()
+        case "jsError":
+            NSLog("Co-learner chat page error: %@", body["message"] as? String ?? "?")
+        case "refreshModels":
+            refreshModels()
         case "refreshUsage":
             refreshUsage(force: body["force"] as? Bool ?? false)
         case "setEffort":

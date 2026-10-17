@@ -1,6 +1,6 @@
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.
+A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.2.
 
 - **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs; the strip at the bottom holds slide thumbnails.
 - **Right, Chat tab:** ask about the slide on screen. The first question on a slide sends the slide image, its text and the text of the slides around it automatically. Pick **Claude**, **ChatGPT**, or **Both** (two answers to compare).
@@ -17,7 +17,7 @@ Claude and ChatGPT share the slide's conversation: when you ask one of them, it 
 | Open a lecture | **Lectures** menu (top left) or the list on the start screen. Any other PDF: ⌘O |
 | Next / previous slide | → / ← (anywhere, except while typing in the chat box or using a visual or slider), ⌘] / ⌘[ , or click a thumbnail |
 | Ask | type and press Enter (Shift+Enter for a new line), or use the buttons: *Explain this slide*, *Visualize it*, *Derive step by step*. Esc leaves the chat box (so ← → turn slides again) |
-| Model and effort | click the model button next to Claude / ChatGPT / Both (e.g. "● Opus 5.5 Medium ⌄"): a menu like the Claude app's, with each model's description and an effort row (also in Settings ⌘,). Each answer is labelled with the model and effort it used |
+| Model and effort | click the model button next to Claude / ChatGPT / Both (e.g. "● Opus 5.5 Medium ⌄"): pick a model and slide the effort (also in Settings ⌘,). **Choose models…** picks which models the menu shows; new models appear by themselves (marked *New* for a week). Each answer is labelled with the model and effort it used |
 | Plan usage | bottom right of the chat shows the short version; click it for the usage card: Claude's current session, week (all models) and week (Fable) with bars and reset times, and ChatGPT's limits, with your plan names. The card refreshes when opened (if older than 2 minutes) and with ↻; it also updates after every answer |
 | Jump to the chat box | ⌘L |
 | Chat / Walkthrough tab | ⌘1 / ⌘2 |
@@ -83,13 +83,13 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 | `WalkthroughPane.swift` | walkthrough tab (html pages) |
 | `StudyPDF.swift`, `ScribeMap.swift` | notes PDFs in the walkthrough tab, slide → notes page |
 | `Prompts.swift` | the tutor instructions |
-| `ModelCatalog.swift` | models, efforts and their descriptions; usage windows and Codex log parsing |
+| `ModelCatalog.swift` | live model lists (Claude Code / Codex), shown/hidden models, effort levels; usage windows |
 | `UsageFetcher.swift` | on-demand plan usage (Claude `/usage`, Codex app-server) |
 | `FrameDetector.swift` | finds the two slide frames on 2-up handout pages |
 | `Web/` | chat page (`chat.html/css/js`, `render.js`), section indexer (`walkthrough_index.js`), vendored KaTeX, marked and DOMPurify |
 
 ## Changelog
 
-- **0.2.1** (2026-10-17): Claude-app-style model menu (model descriptions, effort row) and a click-to-open usage card. Usage is fetched on demand without calling a model: `claude -p /usage` and `claude auth status` (local), and Codex's app-server `account/rateLimits/read`.
-- **0.2** (2026-10-17): model and effort pickers in the chat (Claude: Opus 5.5, Fable 5.1, Sonnet 5.5, Haiku 5.5 × low…max; ChatGPT: the models your plan lists × their efforts); plan-usage line; ← → turn slides; 2-up slide frames measured per deck; the chat page no longer scrolls away (the message list could grow past the window in WebKit).
+- **0.1.2** (2026-10-17): model lists come from the tools and refresh at every launch (and with *Refresh list*): Claude Code's aliases resolved with `/model <alias>`, effort levels from `claude --help`, Codex's `model/list`. Choose which models the menu shows; *New* badge for new models (and when an alias like "opus" starts meaning a newer model); effort is a slider; no model descriptions. A refresh that comes back partial or offline (Codex's built-in presets) is not applied; the plan's list comes from Codex's own cache, which model/list refreshes. Reviewed (2 reviewers + verifiers): model buttons no longer get rebuilt while an answer streams (clicks were lost), the effort slider keeps keyboard focus and drags across redraws.
+- **0.1.1** (2026-10-17): model and effort menu, click-to-open usage card refreshed on demand (`claude -p /usage`, Codex app-server rate limits), ← → turn slides, 2-up slide frames measured per deck, chat page no longer scrolls away.
 - **0.1** (2026-10-17): first version. Reviewed by four independent reviewers (Swift core, UI/model, chat page with 103 browser tests, requirements) with adversarial verification; all confirmed findings fixed before release (two-up slide image and text, deck-switch slide, notes map, chat-page sandbox and sanitizing, partial answers on quit, session handling).

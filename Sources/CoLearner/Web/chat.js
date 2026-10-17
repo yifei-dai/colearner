@@ -41,6 +41,9 @@
   const pendingRender = new Map();
   let rafQueued = false;
 
+  // Page errors go to the app's log (Console.app / stderr) instead of disappearing.
+  window.addEventListener("error", (e) => post({ type: "jsError", message: String(e.message) + " @" + e.lineno + ":" + e.colno }));
+
   function post(msg) {
     try {
       window.webkit.messageHandlers.cl.postMessage(msg);
@@ -141,35 +144,98 @@
     return n;
   }
 
-  function renderModelPop(p, anchor) {
+  // While the effort slider is being dragged, redraws wait until the mouse is released.
+  let dragging = false, redrawAfterDrag = null;
+  document.addEventListener("pointerup", () => {
+    if (!dragging) return;
+    dragging = false;
+    const q = redrawAfterDrag;
+    redrawAfterDrag = null;
+    if (q && pop && pop.kind === "model" && pop.provider === q) renderModelPop(q);
+  }, true);
+
+  function renderModelPop(p) {
     const c = config[p];
     if (!c) return;
+    // The model buttons are redrawn often; always anchor to the one on screen now.
+    const anchor = () => document.querySelector(".pickbtn." + p);
+    if (dragging) { redrawAfterDrag = p; return; }
+    // Keep keyboard focus on the slider across a redraw (arrow keys step the effort).
+    const hadFocus = !!document.activeElement && document.activeElement.type === "range" && popEl.contains(document.activeElement);
     popEl.textContent = "";
+    if (pop && pop.edit) {
+      // Choose which models appear in the menu. The list itself comes from the tool and refreshes at launch.
+      popEl.appendChild(el("div", "pop-title", "Show in the " + NAMES[p] + " menu"));
+      for (const m of c.models) {
+        const row = el("label", "chk");
+        const box = el("input");
+        box.type = "checkbox";
+        box.checked = !m.hidden;
+        box.onchange = () => post({ type: "setModelVisible", provider: p, model: m.id, visible: box.checked });
+        row.appendChild(box);
+        row.appendChild(el("span", "", m.label));
+        if (m.isNew) row.appendChild(el("span", "badge", "New"));
+        popEl.appendChild(row);
+      }
+      const foot = el("div", "pop-foot");
+      const when = c.updated ? new Date(c.updated * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet";
+      foot.appendChild(el("span", "", "List from " + (p === "claude" ? "Claude Code" : "Codex") + ", updated " + when));
+      const refresh = el("button", "refresh", c.refreshing ? "Refreshing…" : "↻ Refresh list");
+      refresh.disabled = !!c.refreshing;
+      refresh.title = "Ask Claude Code and Codex for their current models (also done at every launch)";
+      refresh.onclick = () => post({ type: "refreshModels" });
+      foot.appendChild(refresh);
+      const done = el("button", "link", "Done");
+      done.onclick = () => { pop.edit = false; renderModelPop(p); };
+      foot.appendChild(done);
+      popEl.appendChild(foot);
+      if (anchor()) placePop(anchor(), false);
+      return;
+    }
     popEl.appendChild(el("div", "pop-title", NAMES[p] + " model"));
     for (const m of c.models) {
+      if (m.hidden && m.id !== c.model) continue;
       const b = el("button", "opt" + (m.id === c.model ? " on" : ""));
       b.appendChild(el("span", "check", m.id === c.model ? "✓" : ""));
-      const main = el("span", "opt-main");
-      main.appendChild(el("span", "opt-name", m.label));
-      if (m.detail) main.appendChild(el("span", "opt-detail", m.detail));
-      b.appendChild(main);
+      b.appendChild(el("span", "opt-name", m.label));
+      if (m.isNew) b.appendChild(el("span", "badge", "New"));
       b.onclick = () => post({ type: "setModel", provider: p, model: m.id });
       popEl.appendChild(b);
     }
-    popEl.appendChild(el("div", "pop-title", "Effort"));
-    const seg = el("div", "seg");
-    let current = null;
-    for (const e of c.efforts) {
-      const b = el("button", e.id === c.effort ? "on" : "", e.label);
-      if (e.id === c.effort) current = e;
-      b.title = e.detail || e.label;
-      b.onclick = () => post({ type: "setEffort", provider: p, effort: e.id });
-      seg.appendChild(b);
+    const edit = el("button", "link more", "Choose models…");
+    edit.onclick = () => { pop.edit = true; renderModelPop(p); };
+    popEl.appendChild(edit);
+
+    // Effort: a slider with one stop per level.
+    const n = c.efforts.length;
+    let idx = Math.max(0, c.efforts.findIndex((e) => e.id === c.effort));
+    const head = el("div", "pop-title effort-title");
+    const name = el("span", "effort-now", c.efforts[idx] ? c.efforts[idx].label : "");
+    head.append(el("span", "", "Effort"), name);
+    popEl.appendChild(head);
+    if (n > 1) {
+      const wrap = el("div", "slider");
+      const range = el("input");
+      range.type = "range";
+      range.min = "0";
+      range.max = String(n - 1);
+      range.step = "1";
+      range.value = String(idx);
+      range.oninput = () => { name.textContent = c.efforts[+range.value].label; ticks.querySelectorAll("span").forEach((t, i) => t.classList.toggle("on", i === +range.value)); };
+      range.onchange = () => post({ type: "setEffort", provider: p, effort: c.efforts[+range.value].id });
+      const ticks = el("div", "ticks");
+      c.efforts.forEach((e, i) => {
+        const t = el("span", i === idx ? "on" : "", e.label);
+        t.onclick = () => { range.value = String(i); range.oninput(); range.onchange(); };
+        ticks.appendChild(t);
+      });
+      range.addEventListener("pointerdown", () => { dragging = true; });
+      wrap.append(range, ticks);
+      popEl.appendChild(wrap);
+      if (hadFocus) range.focus();
     }
-    popEl.appendChild(seg);
-    const hint = current && current.detail && current.id !== "medium" ? current.detail : c.hint || "";
-    if (hint) popEl.appendChild(el("div", "pop-hint", hint));
-    placePop(anchor, false);
+    if (c.hint) popEl.appendChild(el("div", "pop-hint", c.hint));
+    if (anchor()) placePop(anchor(), false);
   }
 
   function resetText(w) {
@@ -231,8 +297,20 @@
   }
 
   // `refreshPop`: redraw an open model menu too (when the choices changed), not on every chat update.
+  let pickSig = null;
   function renderPickers(refreshPop) {
     const box = $("#pickers");
+    const sig = JSON.stringify(asking().map((p) => {
+      const c = config[p];
+      if (!c) return null;
+      const m = c.models.find((x) => x.id === c.model), e = c.efforts.find((x) => x.id === c.effort);
+      return [p, m ? m.label : c.model, e ? e.label : c.effort];
+    }));
+    if (sig === pickSig) {
+      // Same buttons: only update which one is open (a rebuilt button would swallow a click in progress).
+      for (const b of box.querySelectorAll(".pickbtn")) b.classList.toggle("open", !!(pop && pop.kind === "model" && b.classList.contains(pop.provider)));
+    } else {
+    pickSig = sig;
     box.textContent = "";
     for (const p of asking()) {
       const c = config[p];
@@ -247,16 +325,17 @@
       b.title = NAMES[p] + ": choose model and effort";
       b.onclick = () => {
         if (pop && pop.kind === "model" && pop.provider === p) { closePop(); return; }
-        pop = { kind: "model", provider: p };
-        renderModelPop(p, b);
+        pop = { kind: "model", provider: p, edit: false };
         renderPickers();
+        renderModelPop(p);
       };
       box.appendChild(b);
+    }
     }
     if (pop && pop.kind === "model") {
       const anchor = box.querySelector(".pickbtn." + pop.provider);
       if (!anchor || !config[pop.provider]) closePop();
-      else if (refreshPop) renderModelPop(pop.provider, anchor);
+      else if (refreshPop) renderModelPop(pop.provider);
     }
   }
 
