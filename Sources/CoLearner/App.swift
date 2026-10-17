@@ -64,28 +64,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
-    @AppStorage("claudeEffort") private var claudeEffort = "medium"
 
     var body: some View {
         Form {
             Section("Claude") {
                 Picker("Model", selection: $model.claudeModel) {
-                    Text("Opus (default)").tag("")
-                    Text("Sonnet").tag("sonnet")
-                    Text("Haiku").tag("haiku")
+                    ForEach(ModelCatalog.claude, id: \.id) { Text($0.label).tag($0.id) }
                 }
-                Picker("Effort", selection: $claudeEffort) {
-                    Text("Low (fastest)").tag("low")
-                    Text("Medium").tag("medium")
-                    Text("High").tag("high")
+                Picker("Effort", selection: $model.claudeEffort) {
+                    ForEach(ModelCatalog.model(.claude, model.claudeModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
                 }
                 LabeledContent("Claude Code", value: model.chat.claude.versionString)
             }
             Section("ChatGPT (Codex)") {
+                Picker("Model", selection: $model.codexModel) {
+                    ForEach(ModelCatalog.codex, id: \.id) { Text($0.label).tag($0.id) }
+                }
                 Picker("Reasoning effort", selection: $model.codexEffort) {
-                    Text("Low (fastest)").tag("low")
-                    Text("Medium").tag("medium")
-                    Text("High").tag("high")
+                    ForEach(ModelCatalog.model(.codex, model.codexModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
                 }
             }
             Section("Files") {

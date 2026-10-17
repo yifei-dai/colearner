@@ -15,13 +15,14 @@ Claude and ChatGPT share the slide's conversation: when you ask one of them, it 
 | Action | How |
 |---|---|
 | Open a lecture | **Lectures** menu (top left) or the list on the start screen. Any other PDF: ⌘O |
-| Next / previous slide | ⌘] / ⌘[ , arrow keys when the slide has focus, or click a thumbnail |
-| Ask | type and press Enter (Shift+Enter for a new line), or use the buttons: *Explain this slide*, *Visualize it*, *Derive step by step* |
+| Next / previous slide | → / ← (anywhere, except while typing in the chat box or using a visual or slider), ⌘] / ⌘[ , or click a thumbnail |
+| Ask | type and press Enter (Shift+Enter for a new line), or use the buttons: *Explain this slide*, *Visualize it*, *Derive step by step*. Esc leaves the chat box (so ← → turn slides again) |
+| Model and effort | the pickers next to Claude / ChatGPT / Both under the chat box (also in Settings ⌘,). Each answer is labelled with the model and effort it used |
+| Plan usage | bottom right of the chat: Claude's 5-hour and weekly use (reported with every Claude answer), ChatGPT's weekly use (read from Codex's session log); orange from 80%, red from 95%; hover for reset times |
 | Jump to the chat box | ⌘L |
 | Chat / Walkthrough tab | ⌘1 / ⌘2 |
 | Stop an answer | the red **Stop** button |
 | Visuals | "Visualize it" answers come with a live interactive drawing; **Open in window** shows it bigger; **Code** shows the source |
-| Model and effort | Co-learner ▸ Settings (⌘,) |
 
 ## First launch
 
@@ -49,7 +50,7 @@ Each slide's conversation keeps one Claude session and one Codex thread, resumed
 
 `tools/make_library.py` writes `Sources/CoLearner/library.json`: the slide folder of each course, nicer deck titles, which walkthrough/review pages and notes belong to which deck, and per-deck settings. New PDFs in a course's slide folder appear on their own; re-run the script (the build does it) to link new walkthrough pages.
 
-- Courses whose library.json `layout` is `twoUp` (handouts with two slides per page): the app splits those PDFs so that slide numbers match the printed ones.
+- Courses whose library.json `layout` is `twoUp` (handouts with two slides per page): the app splits those PDFs so that slide numbers match the printed ones. `FrameDetector.swift` measures where the two slides sit in each deck when it opens (it votes over the first pages; the slide is a block of columns with one long dark run, or its border lines when the slide is light), so a new deck with a slightly different layout is still cut at the slide borders. library.json's frames are only the fallback. Checked on 10 two-up decks: every page agreed with the detected frames.
 - A replaced deck: library.json can hide the old deck (`"hidden": true`) and keep its walkthrough linked to the new deck through a page map (`map`).
 - Walkthrough sections are found by `Web/walkthrough_index.js`, which reads the slide references in each page (eyebrows, headings, `data-pages`, source pills) and scrolls to the most specific section for the slide.
 - Scribe-notes PDFs need no table: pdfTeX stamps each slide crop with its deck file and page (`/PTEX.FileName`, `/PTEX.PageNumber`), and `ScribeMap.swift` reads those.
@@ -86,4 +87,5 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 
 ## Changelog
 
+- **0.2** (2026-10-17): model and effort pickers in the chat (Claude: Opus 5.5, Fable 5.1, Sonnet 5.5, Haiku 5.5 × low…max; ChatGPT: the models your plan lists × their efforts); plan-usage line; ← → turn slides; 2-up slide frames measured per deck; the chat page no longer scrolls away (the message list could grow past the window in WebKit).
 - **0.1** (2026-10-17): first version. Reviewed by four independent reviewers (Swift core, UI/model, chat page with 103 browser tests, requirements) with adversarial verification; all confirmed findings fixed before release (two-up slide image and text, deck-switch slide, notes map, chat-page sandbox and sanitizing, partial answers on quit, session handling).

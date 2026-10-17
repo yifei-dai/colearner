@@ -21,9 +21,11 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
         if let js = try? String(contentsOf: AppPaths.web.appendingPathComponent("walkthrough_index.js"), encoding: .utf8) {
             config.userContentController.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
+        config.userContentController.addUserScript(WKUserScript(source: Self.arrowScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         webView.navigationDelegate = self
+        config.userContentController.add(WeakNavHandler(self), name: "clnav")
     }
 
     func show(_ p: StudyPage?, slide: Int, follow: Bool) {
@@ -51,6 +53,18 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
         debounce = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: w)
     }
+
+    /// ← → on a study page turn the slide, unless a form control (e.g. a demo's slider) has focus.
+    static let arrowScript = """
+    document.addEventListener("keydown", function (e) {
+      if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) return;
+      var a = document.activeElement;
+      if (a && (/^(INPUT|TEXTAREA|SELECT|IFRAME)$/.test(a.tagName) || a.isContentEditable)) return;
+      e.preventDefault();
+      window.webkit.messageHandlers.clnav.postMessage(e.key === "ArrowLeft" ? -1 : 1);
+    }, true);
+    """
+    var onTurn: ((Int) -> Void)?
 
     /// The deck file name tells the indexer which deck's slides to match (one page can cover 01a and 01b).
     var deckFile: String = ""
@@ -112,6 +126,15 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
         decisionHandler(.allow)
     }
 
+}
+
+final class WeakNavHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WalkthroughController?
+    init(_ t: WalkthroughController) { target = t }
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, let d = message.body as? Int, d == 1 || d == -1 else { return }
+        MainActor.assumeIsolated { target?.onTurn?(d) }
+    }
 }
 
 struct WalkthroughPane: View {

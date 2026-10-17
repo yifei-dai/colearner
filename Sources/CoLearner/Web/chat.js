@@ -32,7 +32,11 @@
 
   const NAMES = { claude: "Claude", codex: "ChatGPT" };
 
-  let state = { hasDeck: false, deckTitle: "", page: 0, pageCount: 0, messages: [], others: [], provider: "claude", models: {} };
+  let state = { hasDeck: false, deckTitle: "", page: 0, pageCount: 0, messages: [], others: [], provider: "claude" };
+  // {claude: {models:[{id,label}], model, efforts:[...], effort}, codex: {...}} — from Swift
+  let config = {};
+  // {claude: {windows:[{label, percent, resetsAt}], updated}, codex: {...}} — from Swift
+  let usage = {};
   const elById = new Map();
   const pendingRender = new Map();
   let rafQueued = false;
@@ -92,11 +96,78 @@
       b.classList.toggle("on", on);
       b.setAttribute("aria-checked", on ? "true" : "false");
     }
+    renderPickers();
     const isBusy = busy();
     sendBtn.textContent = isBusy ? "Stop" : "Send";
     sendBtn.classList.toggle("stop", isBusy);
     sendBtn.disabled = !state.hasDeck;
     for (const c of document.querySelectorAll(".chip")) c.disabled = !state.hasDeck || isBusy;
+  }
+
+  function renderPickers() {
+    const box = $("#pickers");
+    box.textContent = "";
+    for (const p of asking()) {
+      const c = config[p];
+      if (!c) continue;
+      const wrap = document.createElement("span");
+      wrap.className = "pick " + p;
+      if (state.provider === "both") {
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = NAMES[p];
+        wrap.appendChild(who);
+      }
+      const mSel = document.createElement("select");
+      mSel.title = NAMES[p] + " model";
+      for (const m of c.models) {
+        const o = document.createElement("option");
+        o.value = m.id;
+        o.textContent = m.label;
+        mSel.appendChild(o);
+      }
+      mSel.value = c.model;
+      mSel.onchange = () => post({ type: "setModel", provider: p, model: mSel.value });
+      const eSel = document.createElement("select");
+      eSel.title = NAMES[p] + " effort (more effort = slower, more thorough)";
+      for (const e of c.efforts) {
+        const o = document.createElement("option");
+        o.value = e;
+        o.textContent = e;
+        eSel.appendChild(o);
+      }
+      eSel.value = c.effort;
+      eSel.onchange = () => post({ type: "setEffort", provider: p, effort: eSel.value });
+      wrap.append(mSel, eSel);
+      box.appendChild(wrap);
+    }
+  }
+
+  function renderUsage() {
+    const box = $("#usage");
+    box.textContent = "";
+    for (const p of ["claude", "codex"]) {
+      const u = usage[p];
+      if (!u || !u.windows || !u.windows.length) continue;
+      const span = document.createElement("span");
+      span.className = "u";
+      const b = document.createElement("b");
+      b.textContent = NAMES[p] + " ";
+      span.appendChild(b);
+      const tips = [];
+      u.windows.forEach((w, i) => {
+        const pct = Math.round(w.percent);
+        const part = document.createElement("span");
+        part.textContent = (i ? " · " : "") + w.label + " " + pct + "%";
+        if (pct >= 95) part.className = "hot";
+        else if (pct >= 80) part.className = "warn";
+        span.appendChild(part);
+        if (w.resetsAt) tips.push(w.label + " resets " + new Date(w.resetsAt * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }));
+      });
+      if (u.updated) tips.push("as of " + new Date(u.updated * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+      span.title = NAMES[p] + " plan usage: " + tips.join("; ");
+      box.appendChild(span);
+    }
   }
 
   function emptyState() {
@@ -315,6 +386,14 @@
       state.provider = p;
       renderHeader();
     },
+    setConfig(c) {
+      config = c || {};
+      renderPickers();
+    },
+    setUsage(u) {
+      usage = u || {};
+      renderUsage();
+    },
     focusInput() {
       input.focus();
     },
@@ -343,7 +422,20 @@
     if (busy()) post({ type: "stop" });
     else send(input.value);
   };
+  // ← → turn slides unless a text box, menu or visual has the keys (decided here, synchronously).
+  document.addEventListener("keydown", (e) => {
+    if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) return;
+    const a = document.activeElement;
+    if (a && ["TEXTAREA", "INPUT", "SELECT", "IFRAME"].includes(a.tagName)) return;
+    e.preventDefault();
+    post({ type: "turn", delta: e.key === "ArrowLeft" ? -1 : 1 });
+  });
+
   input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      input.blur();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       send(input.value);

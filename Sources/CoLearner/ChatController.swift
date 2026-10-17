@@ -15,6 +15,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var runWhere: [String: (deck: String, page: Int)] = [:]
     private var dirty: [String: ChatMessage] = [:]
     private var flushScheduled = false
+    /// Last plan usage each CLI reported (kept across launches).
+    private var usage: [Provider: (windows: [UsageWindow], updated: Double)] = [:]
 
     init(model: AppModel) {
         self.model = model
@@ -35,6 +37,51 @@ final class ChatController: NSObject, WKNavigationDelegate {
         guard ready, let data = try? JSONSerialization.data(withJSONObject: arg, options: [.fragmentsAllowed]),
               let s = String(data: data, encoding: .utf8) else { return }
         webView.evaluateJavaScript("window.CL && CL.\(fn)(\(s))", completionHandler: nil)
+    }
+
+    // MARK: model pickers and usage
+
+    func pushConfig() {
+        func entry(_ p: Provider, _ id: String, _ effort: String) -> [String: Any] {
+            let models = ModelCatalog.list(p)
+            let efforts = ModelCatalog.model(p, id)?.efforts ?? models.first?.efforts ?? []
+            return ["models": models.map { ["id": $0.id, "label": $0.label] }, "model": id, "efforts": efforts, "effort": effort]
+        }
+        js("setConfig", ["claude": entry(.claude, model.claudeModel, model.claudeEffort),
+                         "codex": entry(.codex, model.codexModel, model.codexEffort)])
+    }
+
+    private func loadUsage() {
+        for p in Provider.allCases {
+            if let d = UserDefaults.standard.data(forKey: "usage.\(p.rawValue)"),
+               let w = try? JSONDecoder().decode([UsageWindow].self, from: d) {
+                usage[p] = (w, UserDefaults.standard.double(forKey: "usage.\(p.rawValue).at"))
+            }
+        }
+        pushUsage()
+        // Codex keeps its latest limits in its session logs, so it can be shown before the first question.
+        DispatchQueue.global(qos: .utility).async {
+            let w = UsageWindow.latestCodex(thread: nil)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if !w.isEmpty, self.usage[.codex] == nil { self.setUsage(.codex, w) }
+                }
+            }
+        }
+    }
+
+    private func setUsage(_ p: Provider, _ w: [UsageWindow]) {
+        let now = Date().timeIntervalSince1970
+        usage[p] = (w, now)
+        if let d = try? JSONEncoder().encode(w) { UserDefaults.standard.set(d, forKey: "usage.\(p.rawValue)") }
+        UserDefaults.standard.set(now, forKey: "usage.\(p.rawValue).at")
+        pushUsage()
+    }
+
+    private func pushUsage() {
+        var d: [String: Any] = [:]
+        for (p, u) in usage { d[p.rawValue] = ["windows": u.windows.map(\.js), "updated": u.updated] }
+        js("setUsage", d)
     }
 
     func focusInput() {
@@ -86,6 +133,17 @@ final class ChatController: NSObject, WKNavigationDelegate {
         case "ready":
             ready = true
             showCurrent()
+            pushConfig()
+            loadUsage()
+        case "turn":
+            if let d = body["delta"] as? Int { model.go(d) }
+        case "setModel":
+            guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let m = body["model"] as? String,
+                  ModelCatalog.model(p, m) != nil else { return }
+            if p == .claude { model.claudeModel = m } else { model.codexModel = m }
+        case "setEffort":
+            guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let e = body["effort"] as? String else { return }
+            if p == .claude { model.claudeEffort = e } else { model.codexEffort = e }
         case "send":
             let text = body["text"] as? String ?? ""
             let display = body["display"] as? String
@@ -159,13 +217,14 @@ final class ChatController: NSObject, WKNavigationDelegate {
             }
             var a = ChatMessage(role: .assistant, provider: p, text: "", status: .streaming)
             a.activity = "starting…"
+            let (mid, eff) = p == .claude ? (model.claudeModel, model.claudeEffort) : (model.codexModel, model.codexEffort)
+            a.model = ModelCatalog.label(p, mid) + " · " + eff
             store.update(deck.path, page) { $0.messages.append(a) }
             push(a, deck: deck.path, page: page, immediate: true)
 
             let req = BackendRequest(
                 prompt: prompt, instructions: Prompts.tutor, imageURL: image, resume: resume,
-                model: p == .claude ? model.claudeModel : nil,
-                effort: p == .codex ? model.codexEffort : nil,
+                model: mid, effort: eff,
                 readableDirs: readableDirs(for: deck))
             let id = a.id
             let backend: Backend = p == .claude ? claude : codex
@@ -200,6 +259,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     private func apply(_ ev: BackendEvent, id: String, provider: Provider, deck: String, page: Int, usedResume: String?) {
+        if case .usage(let w) = ev { setUsage(provider, w); return }
         var updated: ChatMessage?
         var finished = false
         var sessionChanged = false
@@ -226,6 +286,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
                 }
                 m.activity = nil
                 finished = true
+            case .usage:
+                break   // handled before the update
             case .failed(let e):
                 m.status = .error
                 m.error = e

@@ -1,5 +1,6 @@
 import SwiftUI
 import PDFKit
+import WebKit
 import UniformTypeIdentifiers
 
 enum RightTab: String { case chat, walkthrough }
@@ -27,17 +28,33 @@ final class AppModel: ObservableObject {
     @Published var provider: String = UserDefaults.standard.string(forKey: "provider") ?? "claude" {
         didSet { UserDefaults.standard.set(provider, forKey: "provider") }
     }
-    @Published var claudeModel: String = UserDefaults.standard.string(forKey: "claudeModel") ?? "" {
-        didSet { UserDefaults.standard.set(claudeModel, forKey: "claudeModel") }
+    // Model and effort per assistant (chosen in the chat's pickers or in Settings).
+    @Published var claudeModel: String = UserDefaults.standard.string(forKey: "claudeModel") ?? "opus" {
+        didSet { UserDefaults.standard.set(claudeModel, forKey: "claudeModel"); chat.pushConfig() }
+    }
+    @Published var claudeEffort: String = UserDefaults.standard.string(forKey: "claudeEffort") ?? "medium" {
+        didSet { UserDefaults.standard.set(claudeEffort, forKey: "claudeEffort"); chat.pushConfig() }
+    }
+    @Published var codexModel: String = UserDefaults.standard.string(forKey: "codexModel") ?? CodexBackend.defaultModel {
+        didSet {
+            UserDefaults.standard.set(codexModel, forKey: "codexModel")
+            // Not every model has every effort level (the luna models stop at max).
+            if let m = ModelCatalog.model(.codex, codexModel), !m.efforts.contains(codexEffort) { codexEffort = m.defaultEffort }
+            chat.pushConfig()
+        }
     }
     @Published var codexEffort: String = UserDefaults.standard.string(forKey: "codexEffort") ?? "medium" {
-        didSet { UserDefaults.standard.set(codexEffort, forKey: "codexEffort") }
+        didSet { UserDefaults.standard.set(codexEffort, forKey: "codexEffort"); chat.pushConfig() }
     }
     @Published var selectedStudyPage: [String: String] = [:]   // deck path -> study page path
     @Published var followSlides = true
 
     lazy var chat = ChatController(model: self)
-    lazy var walk = WalkthroughController()
+    lazy var walk: WalkthroughController = {
+        let w = WalkthroughController()
+        w.onTurn = { [weak self] d in self?.go(d) }
+        return w
+    }()
     lazy var studyPDF = StudyPDFController()
     let thumbs = ThumbStore()
 
@@ -45,8 +62,31 @@ final class AppModel: ObservableObject {
     var pageCount: Int { document?.pageCount ?? 0 }
 
     init() {
+        // v0.1 stored "" for "default Claude model".
+        if ModelCatalog.model(.claude, claudeModel) == nil { claudeModel = "opus" }
+        if ModelCatalog.model(.codex, codexModel) == nil { codexModel = ModelCatalog.codex.first?.id ?? CodexBackend.defaultModel }
         reloadLibrary()
         restoreSession()
+        installArrowKeys()
+    }
+
+    /// ← and → turn slides anywhere in the window, except while typing in a text box or using a visual.
+    private func installArrowKeys() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, e.keyCode == 123 || e.keyCode == 124,
+                  e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+                  self.document != nil, let w = e.window, !(w is NSPanel) else { return e }
+            // Only the main window (it holds the right panel), not Settings or a pop-out visual.
+            let panels: [NSView] = [self.chat.webView, self.walk.webView, self.studyPDF.view]
+            guard panels.contains(where: { $0.window === w }) else { return e }
+            let fr = w.firstResponder
+            if fr is NSText { return e }                    // a native text field
+            // Inside the chat or a walkthrough page, the page itself turns the slide unless a text box,
+            // slider or visual has focus (see chat.js and WalkthroughController.arrowScript).
+            if let v = fr as? NSView, v is WKWebView || v.enclosingWebView != nil { return e }
+            self.go(e.keyCode == 123 ? -1 : 1)
+            return nil
+        }
     }
 
     // MARK: library
@@ -68,6 +108,7 @@ final class AppModel: ObservableObject {
     // MARK: opening decks
 
     func open(_ d: Deck) {
+        var d = d
         if deck?.path == d.path { return }
         if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
         guard let doc = Self.makeDocument(for: d) else {
@@ -77,6 +118,7 @@ final class AppModel: ObservableObject {
             a.runModal()
             return
         }
+        if let f = doc.frames { d.layout.frames = f }   // the frames actually used (also keys the slide-image cache)
         if !openDecks.contains(where: { $0.path == d.path }) { openDecks.append(d) }
         deck = d
         document = doc.document
@@ -118,12 +160,14 @@ final class AppModel: ObservableObject {
 
     /// One PDF page per slide, plus each slide's text. 2-up handouts are split into two cropped pages; their
     /// text is read per frame from the original page (cropped copies share one text layer).
-    static func makeDocument(for d: Deck) -> (document: PDFDocument, texts: [String])? {
+    static func makeDocument(for d: Deck) -> (document: PDFDocument, texts: [String], frames: [[Double]]?)? {
         guard let src = PDFDocument(url: d.url) else { return nil }
-        guard d.layout.isTwoUp, let frames = d.layout.frames else {
+        guard d.layout.isTwoUp, let configured = d.layout.frames else {
             let texts = (0..<src.pageCount).map { src.page(at: $0)?.string ?? "" }
-            return (src, texts)
+            return (src, texts, nil)
         }
+        // Measure where the slides sit in this deck (new decks may shift a few points); library.json is the fallback.
+        let frames = FrameDetector.frames(for: src) ?? configured
         let out = PDFDocument()
         var texts: [String] = []
         for i in 0..<src.pageCount {
@@ -143,8 +187,8 @@ final class AppModel: ObservableObject {
                 texts.append(text)
             }
         }
-        if texts.isEmpty { return (src, (0..<src.pageCount).map { src.page(at: $0)?.string ?? "" }) }
-        return (out, texts)
+        if texts.isEmpty { return (src, (0..<src.pageCount).map { src.page(at: $0)?.string ?? "" }, nil) }
+        return (out, texts, frames)
     }
 
     /// True if anything but white is drawn inside `rect` (used for slides that are pure images).
@@ -255,5 +299,13 @@ final class AppModel: ObservableObject {
         } else if let first = openDecks.first {
             open(first)
         }
+    }
+}
+
+private extension NSView {
+    var enclosingWebView: WKWebView? {
+        var v = superview
+        while let s = v { if let w = s as? WKWebView { return w }; v = s.superview }
+        return nil
     }
 }

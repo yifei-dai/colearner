@@ -43,9 +43,14 @@
       <button data-p="codex" role="radio">ChatGPT</button>
       <button data-p="both" role="radio">Both</button>
     </div>
-    <span id="attach" title="The current slide image and text are sent with your first question on this slide"></span>
+    <span id="pickers"></span>
     <span class="grow"></span>
     <button id="btn-send" class="primary">Send</button>
+  </div>
+  <div id="status">
+    <span id="attach" title="The current slide image and text are sent with your first question on this slide"></span>
+    <span class="grow"></span>
+    <span id="usage" title="Plan usage reported by each tool after its last answer"></span>
   </div>
 </footer>
 <script src="chat.js"></script>

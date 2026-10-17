@@ -17,6 +17,7 @@ enum BackendEvent {
     case delta(String)          // append to the answer
     case replace(String)        // the full answer so far (used at the end, or for whole-message backends)
     case activity(String?)      // "Reading L05_notes.tex…"
+    case usage([UsageWindow])   // plan usage reported along the way
     case finished
     case failed(String)
 }
@@ -52,7 +53,7 @@ private func humanError(_ s: String) -> String {
 
 @MainActor
 final class CodexBackend: Backend {
-    static let defaultModel = "gpt-6-astra"
+    nonisolated static let defaultModel = "gpt-6-astra"
 
     nonisolated static func locate() -> URL? {
         let fm = FileManager.default
@@ -133,9 +134,10 @@ final class CodexBackend: Backend {
         enc.outputFormatting = [.withoutEscapingSlashes]
         let tomlString = (try? String(decoding: enc.encode(req.instructions), as: UTF8.self)) ?? "\"\""
         let model = (req.model?.isEmpty == false) ? req.model! : Self.defaultModel
+        let effort = req.effort ?? "medium"
         var args = ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config",
                     "-m", model, "-s", "read-only", "-C", work.path,
-                    "-c", "model_reasoning_effort=\(req.effort ?? "medium")",
+                    "-c", "model_reasoning_effort=\(effort)",
                     "-c", "web_search=disabled",
                     "--disable", "shell_tool", "--disable", "unified_exec",
                     "-c", "developer_instructions=\(tomlString)"]
@@ -146,7 +148,8 @@ final class CodexBackend: Backend {
         var messages: [String] = []
         var completed = false
         var failure: String?
-        onEvent(.model(model))
+        var thread: String? = req.resume
+        onEvent(.model(ModelCatalog.label(.codex, model) + " · " + effort))
         let runner = ProcessRunner(
             executable: bin, arguments: args, cwd: work,
             environment: ToolLocator.environment(addingDirsOf: [bin]),
@@ -154,7 +157,7 @@ final class CodexBackend: Backend {
                 guard let o = jsonObject(line), let type = o["type"] as? String else { return }
                 switch type {
                 case "thread.started":
-                    if let id = o["thread_id"] as? String { onEvent(.session(id)) }
+                    if let id = o["thread_id"] as? String { thread = id; onEvent(.session(id)) }
                 case "turn.started":
                     onEvent(.activity("thinking…"))
                 case "item.started":
@@ -181,6 +184,9 @@ final class CodexBackend: Backend {
                 }
             },
             onExit: { status, stderr, cancelled in
+                // Codex writes its plan usage into the session log, not to stdout.
+                let w = UsageWindow.latestCodex(thread: thread)
+                if !w.isEmpty { onEvent(.usage(w)) }
                 if cancelled { onEvent(.finished); return }
                 if let failure { onEvent(.failed(Self.withHint(failure))); return }
                 if completed || !messages.isEmpty { onEvent(.finished); return }
@@ -283,6 +289,7 @@ final class ClaudeBackend: Backend {
             return nil
         }
         let model = (req.model?.isEmpty == false) ? req.model! : "opus"
+        let effort = req.effort ?? "medium"
         if model == "opus", ver.lexicographicallyPrecedes(Self.minVersion) {
             onEvent(.failed("Claude Code \(versionString) is too old for Opus 5.5 (needs 2.1.280+). Run `claude update` in Terminal, then restart Co-learner."))
             return nil
@@ -293,7 +300,7 @@ final class ClaudeBackend: Backend {
 
         var args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages",
-                    "--model", model, "--effort", UserDefaults.standard.string(forKey: "claudeEffort") ?? "medium",
+                    "--model", model, "--effort", effort,
                     "--tools", "Read,Grep,Glob",
                     // Read works on any path in -p mode; these deny rules keep Claude out of the handwritten scans.
                     "--disallowedTools", "Read(//**/*inclass*)", "Read(//**/*_scribing_*.pdf)",
@@ -336,7 +343,7 @@ final class ClaudeBackend: Backend {
                 case "system":
                     if (o["subtype"] as? String) == "init" {
                         if let s = o["session_id"] as? String { onEvent(.session(s)) }
-                        if let m = o["model"] as? String { onEvent(.model(Self.prettyModel(m))) }
+                        if let m = o["model"] as? String { onEvent(.model(Self.prettyModel(m) + " · " + effort)) }
                     }
                 case "stream_event":
                     guard let ev = o["event"] as? [String: Any], let et = ev["type"] as? String else { return }
@@ -364,6 +371,11 @@ final class ClaudeBackend: Backend {
                               (d["type"] as? String) == "text_delta", let t = d["text"] as? String {
                         text += t
                         onEvent(.delta(t))
+                    }
+                case "rate_limit_event":
+                    if let info = o["rate_limit_info"] as? [String: Any] {
+                        let w = UsageWindow.fromClaude(info)
+                        if !w.isEmpty { onEvent(.usage(w)) }
                     }
                 case "assistant":
                     // Name the file being read, if any.
