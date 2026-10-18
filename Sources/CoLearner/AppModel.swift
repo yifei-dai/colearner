@@ -8,6 +8,7 @@ enum RightTab: String, CaseIterable { case chat, walkthrough }
 @MainActor
 final class AppModel: ObservableObject {
     @Published var courses: [Course] = []
+    @Published private(set) var libraryRevision = 0
     @Published var openDecks: [Deck] = []
     /// A browser-style "New Tab" (shows the lecture list; picking a lecture opens it there).
     @Published var newTab = false
@@ -89,6 +90,8 @@ final class AppModel: ObservableObject {
     }
     @Published private(set) var deck: Deck?
     @Published private(set) var document: PDFDocument?
+    private var documentRevision: FileRevision?
+    private var documentThumbnailKey = ""
     @Published var page: Int = 1 {
         didSet {
             let clamped = min(max(page, 1), max(pageCount, 1))
@@ -214,6 +217,11 @@ final class AppModel: ObservableObject {
             fresh.layout = d.layout   // keep the slide frames measured when the deck was opened
             deck = fresh
         }
+        libraryRevision += 1
+        if let d = deck {
+            _ = refreshDocumentIfNeeded()
+            chat.sourcesDidChange(for: deck ?? d)
+        }
     }
 
     func deck(path: String) -> Deck? {
@@ -291,8 +299,13 @@ final class AppModel: ObservableObject {
     /// Open a lecture from the Lectures menu or the lecture list. From a New Tab, it takes that tab's place.
     func open(_ d: Deck) {
         var d = d
-        if deck?.path == d.path { return }
+        if deck?.path == d.path {
+            _ = refreshDocumentIfNeeded()
+            if let deck { chat.sourcesDidChange(for: deck) }
+            return
+        }
         if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
+        let revision = FileRevision.read(d.path)
         guard let doc = Self.makeDocument(for: d) else {
             let a = NSAlert()
             a.messageText = "Could not open \(d.title)"
@@ -306,13 +319,43 @@ final class AppModel: ObservableObject {
         if !openDecks.contains(where: { $0.path == d.path }) { openDecks.append(d) }
         deck = d
         document = doc.document
+        documentRevision = revision
+        documentThumbnailKey = "\(d.path)|\(String(describing: revision))|\(d.layout.frames ?? [])"
         slideTexts = doc.texts
         let last = UserDefaults.standard.integer(forKey: "lastPage.\(d.path)")
         lastNotifiedPage = 0
         page = min(max(last, 1), max(doc.document.pageCount, 1))
         saveSession()
         chatPages = Set(chat.store.pagesWithChats(d.path))
+        chat.sourcesDidChange(for: d)
         chat.showCurrent()
+    }
+
+    /// Reload a replaced PDF before sending context, so the text, images and displayed slides agree.
+    @discardableResult
+    func refreshDocumentIfNeeded() -> Bool {
+        guard var d = deck else { return false }
+        let revision = FileRevision.read(d.path)
+        guard revision != documentRevision else { return document != nil }
+        guard let made = Self.makeDocument(for: d) else {
+            let alert = NSAlert()
+            alert.messageText = "Could not reload \(d.title)"
+            alert.informativeText = "The PDF changed or is unavailable. Restore the file before asking about it.\n\(d.path)"
+            alert.runModal()
+            return false
+        }
+        if let frames = made.frames { d.layout.frames = frames }
+        document = made.document
+        documentRevision = revision
+        documentThumbnailKey = "\(d.path)|\(String(describing: revision))|\(d.layout.frames ?? [])"
+        slideTexts = made.texts
+        deck = d
+        if let i = openDecks.firstIndex(where: { $0.path == d.path }) { openDecks[i] = d }
+        selectingArea = false
+        chat.clearArea()
+        page = min(max(page, 1), max(made.document.pageCount, 1))
+        chat.showCurrent()
+        return true
     }
 
     func close(_ d: Deck) {
@@ -513,7 +556,7 @@ final class AppModel: ObservableObject {
     }
 
     func thumbnail(_ p: Int) -> NSImage? {
-        thumbs.image(key: "\(deckID)#\(p)", page: document?.page(at: p - 1))
+        thumbs.image(key: "\(documentThumbnailKey)#\(p)", page: document?.page(at: p - 1))
     }
 
     func refreshChatPages() {

@@ -21,7 +21,7 @@ enum BackendEvent {
     case usage([UsageWindow])   // plan usage reported along the way
     case finished
     case failed(String)
-    /// The partial answer on screen did not make it into the assistant's session (killed, cut off, failed).
+    /// The partial answer on screen may be missing from the assistant's session (killed, cut off, failed).
     case notKept
     /// The turn completed and is in the session (a Stop pressed after this doesn't make it "stopped").
     case saved
@@ -117,7 +117,17 @@ final class CodexBackend: Backend {
     }
 
     private var cached: URL??
-    init() {
+    private let workDirectory: URL?
+    private let readUsage: (String?) -> [UsageWindow]
+
+    init(binary: URL? = nil, workDirectory: URL? = nil,
+         readUsage: @escaping (String?) -> [UsageWindow] = { UsageWindow.latestCodex(thread: $0) }) {
+        self.workDirectory = workDirectory
+        self.readUsage = readUsage
+        if let binary {
+            cached = .some(binary)
+            return
+        }
         DispatchQueue.global(qos: .utility).async {
             let u = Self.locate()
             DispatchQueue.main.async { MainActor.assumeIsolated { if self.cached == nil { self.cached = .some(u) } } }
@@ -138,7 +148,7 @@ final class CodexBackend: Backend {
             onEvent(.failed("Codex CLI not found. Install it (npm i -g @openai/codex), run `codex login` in Terminal, then restart Co-learner."))
             return nil
         }
-        let work = AppPaths.support.appendingPathComponent("codex-work", isDirectory: true)
+        let work = workDirectory ?? AppPaths.support.appendingPathComponent("codex-work", isDirectory: true)
         try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
 
         let enc = JSONEncoder()
@@ -197,14 +207,17 @@ final class CodexBackend: Backend {
             },
             onExit: { status, stderr, cancelled in
                 // Codex writes its plan usage into the session log, not to stdout.
-                let w = UsageWindow.latestCodex(thread: thread)
+                let w = self.readUsage(thread)
                 if !w.isEmpty { onEvent(.usage(w)) }
                 if completed && failure == nil { onEvent(.finished); return }
+                // An agent_message may be commentary before the final answer. Only turn.completed
+                // confirms that the turn finished; replay partial text if an unfinished turn is resumed.
+                if !completed && messages.contains(where: { !$0.isEmpty }) { onEvent(.notKept) }
                 if cancelled { onEvent(.finished); return }
                 if let failure { onEvent(.failed(Self.withHint(failure))); return }
-                if completed || !messages.isEmpty { onEvent(.finished); return }
                 let tail = stderr.split(separator: "\n").suffix(6).joined(separator: "\n")
-                onEvent(.failed("Codex exited (status \(status)) without an answer.\n\(tail)"))
+                let reason = messages.isEmpty ? "without an answer" : "before the answer finished"
+                onEvent(.failed("Codex exited (status \(status)) \(reason).\n\(tail)"))
             })
         do {
             try runner.start(stdin: nil)

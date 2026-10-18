@@ -10,6 +10,11 @@ let package = Package(
             path: "Sources/CoLearner",
             exclude: ["Web", "library.json"],
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "CoLearnerTests",
+            dependencies: ["CoLearner"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
 )

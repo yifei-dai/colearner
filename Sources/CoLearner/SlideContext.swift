@@ -9,11 +9,13 @@ enum SlideImages {
     static let longEdge: CGFloat = 1568
 
     /// cache/slides/<deck+version>/ — changes when the PDF is replaced or the 2-up frames change.
+    static func cacheKey(for deck: Deck) -> String {
+        let stamp = "\(deck.path)|\(String(describing: FileRevision.read(deck.path)))|\(deck.layout.frames ?? [])|v4"
+        return String(SHA256.hash(data: Data(stamp.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16))
+    }
+
     static func folder(for deck: Deck) -> URL {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: deck.path)
-        let stamp = "\(deck.path)|\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\((attrs?[.size] as? Int) ?? 0)|\(deck.layout.frames ?? [])|v3"
-        let h = SHA256.hash(data: Data(stamp.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
-        let dir = AppPaths.cache.appendingPathComponent("slides/\(h)", isDirectory: true)
+        let dir = AppPaths.cache.appendingPathComponent("slides/\(cacheKey(for: deck))", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -112,6 +114,8 @@ enum DeckContext {
         }
         if includeFiles {
             s += "Slide images: \(SlideImages.folder(for: deck).path)/slide-N.png (open one with Read when you need a slide you haven't been shown).\n"
+            s += "This is the current source list: read only these slide images and the related files listed below. "
+                + "Earlier chat may mention removed files or older slides; those references do not grant permission to read removed files.\n"
             let files = deck.walkthroughs.filter { !$0.isPDF }.map { "- Study page (\($0.title)): \($0.path)" }
                 + deck.contextFiles.map { f -> String in
                     if f.contains("/subtitles/") { return "- Transcript of the instructor's recorded lecture on this topic: \(f)" }
@@ -122,8 +126,11 @@ enum DeckContext {
                 s += "Related files you may read only if a question needs more than the slides (read only these):\n"
                     + files.joined(separator: "\n") + "\n"
                     + "Never open handwritten scans (*_inclass_notes.pdf, *_scribing_*.pdf).\n"
+            } else {
+                s += "No related files are currently linked.\n"
             }
         }
+        s += "Use this current deck and its images as authoritative if earlier answers describe an older version.\n"
         return s + "</lecture_deck>\n\n"
     }
 

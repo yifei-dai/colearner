@@ -338,16 +338,45 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     private var prerendered = Set<String>()
 
+    /// A changed PDF or linked file set invalidates both providers' cached context, including history
+    /// conversations. Cancel affected active runs before their old file manifest can be used again.
+    func sourcesDidChange(for deck: Deck) {
+        let revision = SourceRevision.context(for: deck)
+        var changed = false
+        for conversation in store.conversations(deck.path) {
+            let affected = Provider.allCases.filter { conversation.contextRevisions?[$0.rawValue] != revision }
+            guard !affected.isEmpty else { continue }
+            for (id, whereAt) in runWhere where whereAt.deck == deck.path && whereAt.conv == conversation.id {
+                guard let p = conversation.messages.first(where: { $0.id == id })?.provider,
+                      affected.contains(p), let handle = running.removeValue(forKey: id) else { continue }
+                stopping[id] = handle
+                handle.cancel()
+                store.update(deck.path, conversation.id) { c in
+                    if let i = c.messages.firstIndex(where: { $0.id == id }) { c.messages[i].activity = "stopping…" }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.forceStopped(id) }
+            }
+            store.update(deck.path, conversation.id) { c in
+                for provider in affected { c.prepareContext(revision, for: provider) }
+            }
+            changed = true
+        }
+        if changed { store.save(deck.path); showCurrent() }
+    }
+
     /// One conversation per deck. Each assistant's session gets the deck's text once, then only what it hasn't
     /// seen: the image of the slide the student is on, images of slides the question mentions, a selected area, and
     /// the other assistant's messages.
     func send(text: String, display: String?, choice: String, useArea: Bool) {
+        guard model.refreshDocumentIfNeeded() else { return }
         guard let deck = model.deck, let doc = model.document else { return }
         let page = model.page, count = model.pageCount
         let providers: [Provider] = choice == "both" ? [.claude, .codex] : [Provider(rawValue: choice) ?? .claude]
-        let conv = store.current(deck.path)
+        var conv = store.current(deck.path)
         // Only the assistants being asked must be free (one session can't answer two questions at once).
         if conv.messages.contains(where: { $0.status == .streaming && providers.contains($0.provider ?? .claude) }) { return }
+        sourcesDidChange(for: deck)
+        conv = store.current(deck.path)
         let convID = conv.id
         let areaNow = useArea ? area.flatMap { $0.deck == deck.path && $0.page == page ? $0 : nil } : nil
 

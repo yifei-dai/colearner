@@ -54,6 +54,8 @@ struct Conversation: Codable, Identifiable {
     var seenBy: [String: [String]]?
     /// provider -> slides whose image that provider's session has been shown.
     var seenSlides: [String: [Int]]?
+    /// The source version used to start each provider's session. Missing in older chat files.
+    var contextRevisions: [String: String]?
     /// Migrated from the per-slide chats of v0.1–v0.1.4 (no sessions to resume).
     var legacy: Bool?
 
@@ -64,6 +66,16 @@ struct Conversation: Codable, Identifiable {
             seenBy?[p.rawValue] = nil
             seenSlides?[p.rawValue] = nil
         }
+    }
+    /// Preserve the visible conversation, but rebuild a provider's context when its sources change.
+    @discardableResult
+    mutating func prepareContext(_ revision: String, for provider: Provider) -> Bool {
+        guard contextRevisions?[provider.rawValue] != revision else { return false }
+        setSession(nil, for: provider)
+        var revisions = contextRevisions ?? [:]
+        revisions[provider.rawValue] = revision
+        contextRevisions = revisions
+        return true
     }
     var pages: [Int] { Array(Set(messages.compactMap(\.page))).sorted() }
     var isEmpty: Bool { messages.isEmpty }
@@ -92,9 +104,15 @@ struct DeckChats: Codable {
 /// Loads and saves chats, one JSON file per deck in Application Support.
 @MainActor
 final class ChatStore {
+    private let directory: URL
     private var decks: [String: DeckChats] = [:]
     /// Decks whose chat file could not be read or set aside: never written this session (nothing is overwritten).
     private var readOnly: Set<String> = []
+
+    init(directory: URL = AppPaths.chats) {
+        self.directory = directory
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
 
     private func base(_ deckPath: String) -> String {
         let h = SHA256.hash(data: Data(deckPath.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
@@ -103,9 +121,9 @@ final class ChatStore {
         return "\(name)-\(h)"
     }
     /// v0.1.5+ chats live in their own file, so an older build (which reads `<base>.json`) never sees them.
-    private func fileURL(_ deckPath: String) -> URL { AppPaths.chats.appendingPathComponent(base(deckPath) + ".chat2.json") }
+    private func fileURL(_ deckPath: String) -> URL { directory.appendingPathComponent(base(deckPath) + ".chat2.json") }
     /// The per-slide chats file of v0.1–v0.1.4 (left as it is, for those versions).
-    private func legacyURL(_ deckPath: String) -> URL { AppPaths.chats.appendingPathComponent(base(deckPath) + ".json") }
+    private func legacyURL(_ deckPath: String) -> URL { directory.appendingPathComponent(base(deckPath) + ".json") }
 
     private func decode(_ url: URL) -> DeckChats? {
         guard let data = try? Data(contentsOf: url) else { return nil }
@@ -157,11 +175,11 @@ final class ChatStore {
                     guard let r = n.range(of: "unreadable-") else { return 0 }
                     return Int(n[r.upperBound...].prefix { $0.isNumber }) ?? 0
                 }
-                let candidates = ((try? fm.contentsOfDirectory(atPath: AppPaths.chats.path)) ?? [])
+                let candidates = ((try? fm.contentsOfDirectory(atPath: directory.path)) ?? [])
                     .filter { n in prefixes.contains { n.hasPrefix($0) } }
                     .sorted { stamp($0) > stamp($1) }
                 for name in candidates {
-                    let u = AppPaths.chats.appendingPathComponent(name)
+                    let u = directory.appendingPathComponent(name)
                     guard let c = decode(u), let convs = c.conversations else { continue }
                     for cv in convs where !recovered.contains(where: { $0.id == cv.id }) { recovered.append(cv) }
                     if recoveredCurrent == nil { recoveredCurrent = c.current }
@@ -228,11 +246,20 @@ final class ChatStore {
             writeNow = true
         }
         chats.threads = nil
-        // A crash or quit mid-answer leaves "streaming" messages behind; close them.
+        // A crash can leave optimistic seen markers for a turn the CLI never received. Its session
+        // cannot safely resume: rebuild only the affected provider, keeping the visible transcript.
         for ci in (chats.conversations ?? []).indices {
             for mi in chats.conversations![ci].messages.indices where chats.conversations![ci].messages[mi].status == .streaming {
+                let provider = chats.conversations![ci].messages[mi].provider
                 chats.conversations![ci].messages[mi].status = .stopped
                 chats.conversations![ci].messages[mi].activity = nil
+                if !chats.conversations![ci].messages[mi].text.isEmpty {
+                    chats.conversations![ci].messages[mi].notInSession = true
+                }
+                for p in provider.map({ [$0] }) ?? Provider.allCases {
+                    chats.conversations![ci].setSession(nil, for: p)
+                }
+                needSave = true
             }
         }
         if (chats.conversations ?? []).isEmpty {

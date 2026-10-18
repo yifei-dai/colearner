@@ -86,6 +86,25 @@ This builds `build/Co-learner.app` and copies it to `~/Applications`. For a quic
 
 Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships only with Xcode, so the code avoids `@State`.
 
+## Testing
+
+Run `scripts/test.sh` on macOS with the Command Line Tools. The Swift Testing suite uses temporary chats and PDFs, fake CLI executables, and a nonpersistent WebKit fixture. It never sends questions to a live AI service or changes your saved chats. XCTest and Xcode are not required. To run one suite, for example: `scripts/test.sh --filter ChatContextTests`.
+
+## Reliability review (2026-10-18)
+
+The six findings below are fixed and covered by regression tests:
+
+| Finding | Fix and regression coverage |
+|---|---|
+| A partial ChatGPT answer could be marked successful after a failed CLI exit. | Require `turn.completed`; preserve partial text and report incomplete turns. Backend tests cover clean/error exits, explicit errors, retries, and cancellation before/after completion. |
+| Crash recovery retained context markers for turns the assistant might never have received. | Clear the interrupted provider's session and seen markers, preserving messages and the other provider. Recovery tests reopen real saved chat files and verify the repaired state persists. |
+| Replaced slides and linked/unlinked notes did not refresh existing assistant sessions. | Persist a source revision per provider; changed sources cancel affected runs and rebuild context on the next question. Reload changed PDFs and invalidate slide-image/thumbnail caches. Tests cover saved sessions, revisions with restored timestamps, link/unlink/edit operations, and unchanged-source resumes. Older unversioned sessions refresh once; chat history is retained. |
+| Rebuilt notes PDFs retained outdated slide-to-page maps and displayed pages. | Version both the mapping cache and the displayed PDF. Real PDF fixtures cover replacement, shared notes, newly referenced decks, deletion, incomplete builds, and recovery. Use **Reload library** after rebuilding notes. |
+| Walkthrough arrow handling also turned slides while operating interactive visuals. | Let widgets handle keys first; respect handled events and focusable visuals. Execute the actual injected JavaScript against widget and ordinary-page key cases. |
+| A delayed walkthrough scroll could run after switching decks or pages. | Cancel queued work and reject callbacks from older selections/navigation. Controller tests cover page switches, shared HTML with different deck metadata, clearing, and disabling Follow slides. |
+
+Verified on 2026-10-18: all 23 tests across four suites passed, and the optimized release build succeeded. These tests exercise local protocol and UI behavior with controlled fixtures; live Claude/ChatGPT service availability is outside their scope.
+
 ## Layout
 
 | File | Role |

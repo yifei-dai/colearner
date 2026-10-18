@@ -6,13 +6,25 @@ import CoreGraphics
 /// pdfTeX stamps every included PDF page with /PTEX.FileName and /PTEX.PageNumber, so each slide crop
 /// in the notes says which deck and slide it came from. No hand-made tables needed.
 enum ScribeMap {
-    private static var cache: [String: [String: [Int: Int]]] = [:]   // notes path -> deck file -> slide -> notes page
+    private struct CachedMap {
+        var revision: FileRevision
+        var decks: [String: [Int: Int]]   // deck file -> slide -> notes page
+    }
+    private static var cache: [String: CachedMap] = [:]
 
     /// slide number -> first notes page (1-based) that shows that slide, for the deck with this file name.
     static func pages(notes path: String, deckFile: String) -> [Int: Int] {
-        if let c = cache[path] { return c[deckFile] ?? [:] }
-        let all = scan(path)
-        cache[path] = all
+        guard let revision = FileRevision.read(path) else {
+            cache[path] = nil
+            return [:]
+        }
+        if let c = cache[path], c.revision == revision { return c.decks[deckFile] ?? [:] }
+        cache[path] = nil
+        // A notes build may briefly leave no readable PDF. Retry next time instead of caching that failure.
+        guard let all = scan(path) else { return [:] }
+        if FileRevision.read(path) == revision {
+            cache[path] = CachedMap(revision: revision, decks: all)
+        }
         return all[deckFile] ?? [:]
     }
 
@@ -26,8 +38,8 @@ enum ScribeMap {
         return (map[first]!, false)
     }
 
-    private static func scan(_ path: String) -> [String: [Int: Int]] {
-        guard let doc = CGPDFDocument(URL(fileURLWithPath: path) as CFURL) else { return [:] }
+    private static func scan(_ path: String) -> [String: [Int: Int]]? {
+        guard let doc = CGPDFDocument(URL(fileURLWithPath: path) as CFURL) else { return nil }
         var out: [String: [Int: Int]] = [:]
         for i in 1...max(doc.numberOfPages, 1) {
             guard let page = doc.page(at: i), let dict = page.dictionary else { continue }

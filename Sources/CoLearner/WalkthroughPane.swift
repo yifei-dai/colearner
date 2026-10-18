@@ -13,8 +13,12 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
     private var pendingSlide: Int?
     private var ready = false
     private var debounce: DispatchWorkItem?
+    private var generation = 0
+    private var followsSlides = true
+    private var loadingNavigation: WKNavigation?
+    private var rebuildIndex = false
 
-    override init() {
+    override convenience init() {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         // The section indexer runs inside every study page once it has loaded.
@@ -22,47 +26,74 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
             config.userContentController.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
         config.userContentController.addUserScript(WKUserScript(source: Self.arrowScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        webView = WKWebView(frame: .zero, configuration: config)
+        self.init(webView: WKWebView(frame: .zero, configuration: config))
+    }
+
+    /// Accepting a web view also lets tests exercise navigation without loading real study pages.
+    init(webView: WKWebView) {
+        self.webView = webView
         super.init()
         webView.navigationDelegate = self
-        config.userContentController.add(WeakNavHandler(self), name: "clnav")
+        webView.configuration.userContentController.add(WeakNavHandler(self), name: "clnav")
     }
 
     func show(_ p: StudyPage?, slide: Int, follow: Bool) {
+        // Every selection supersedes pending work, including a different deck sharing this HTML file,
+        // clearing the page, and turning Follow slides off while a load or scroll is still pending.
+        debounce?.cancel()
+        debounce = nil
+        generation += 1
+        pendingSlide = nil
+        followsSlides = follow
         guard let p else {
+            let hadPage = page != nil
             page = nil
             loadedPath = nil
-            webView.loadHTMLString("", baseURL: nil)
+            ready = false
+            sectionTitle = nil
+            coverage = nil
+            if hadPage { loadingNavigation = webView.loadHTMLString("", baseURL: nil) }
             return
         }
+        let numberingChanged = page?.numbering != p.numbering
+        page = p   // A shared HTML file can have different numbering or a page map for each deck.
         if p.path != loadedPath {
-            page = p
+            rebuildIndex = false
             ready = false
             loadedPath = p.path
             sectionTitle = nil
             coverage = nil
-            pendingSlide = slide
+            pendingSlide = follow ? slide : nil
             let url = URL(fileURLWithPath: p.path)
-            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            loadingNavigation = webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             return
         }
-        guard follow else { return }
+        if numberingChanged { rebuildIndex = true }
+        guard follow else {
+            if ready { webView.evaluateJavaScript("window.__coLearnerWT && __coLearnerWT.cancelPin()", completionHandler: nil) }
+            return
+        }
+        guard ready else { pendingSlide = slide; return }
         // Arrow-key bursts: only scroll for the slide the user stops on.
-        debounce?.cancel()
-        let w = DispatchWorkItem { [weak self] in self?.goto(slide) }
+        let current = generation
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == current else { return }
+            self.goto(slide)
+        }
         debounce = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: w)
     }
 
-    /// ← → on a study page turn the slide, unless a form control (e.g. a demo's slider) has focus.
+    /// Study-page widgets get the keys first; unhandled arrows elsewhere turn the lecture slide.
     static let arrowScript = """
     document.addEventListener("keydown", function (e) {
-      if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) return;
+      if (e.defaultPrevented || (e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) return;
       var a = document.activeElement;
-      if (a && (/^(INPUT|TEXTAREA|SELECT|IFRAME)$/.test(a.tagName) || a.isContentEditable)) return;
+      if (a && (/^(INPUT|TEXTAREA|SELECT|IFRAME|CANVAS|SVG)$/.test(a.tagName.toUpperCase()) || a.isContentEditable ||
+                a.closest("svg, canvas, [tabindex]:not(a):not(button), [role='slider'], [role='tree'], [role='treeitem']"))) return;
       e.preventDefault();
       window.webkit.messageHandlers.clnav.postMessage(e.key === "ArrowLeft" ? -1 : 1);
-    }, true);
+    });
     """
     var onTurn: ((Int) -> Void)?
 
@@ -80,13 +111,17 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
     }
 
     func goto(_ slide: Int) {
+        guard page != nil, followsSlides else { return }
         guard ready else { pendingSlide = slide; return }
+        let current = generation
         var q: [String: Any] = ["file": deckFile, "page": ref(for: slide), "behavior": "smooth"]
         if let n = page?.numbering { q["numbering"] = n }
+        // In particular, removing an explicit numbering override must restore the page's default.
+        if rebuildIndex { q["rebuild"] = true; rebuildIndex = false }
         guard let data = try? JSONSerialization.data(withJSONObject: q), let arg = String(data: data, encoding: .utf8) else { return }
         webView.evaluateJavaScript("window.__coLearnerWT ? __coLearnerWT.go(\(arg)) : null") { [weak self] result, _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, self.generation == current else { return }
                 if let d = result as? [String: Any], (d["ok"] as? Bool) == true {
                     let path = (d["path"] as? [String])?.filter { !$0.isEmpty } ?? []
                     var t = path.isEmpty ? (d["title"] as? String ?? "") : path.joined(separator: " › ")
@@ -101,11 +136,15 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard page != nil, navigation === loadingNavigation else { return }
         ready = true
-        let numbering = page?.numbering.map { "{numbering: \"\($0)\"}" } ?? "{}"
+        let current = generation
+        let options = page?.numbering.map { ["numbering": $0] } ?? [:]
+        let data = (try? JSONSerialization.data(withJSONObject: options)) ?? Data("{}".utf8)
+        let numbering = String(decoding: data, as: UTF8.self)
         webView.evaluateJavaScript("window.__coLearnerWT ? __coLearnerWT.index(\(numbering)).entries.length : -1") { [weak self] result, _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, self.generation == current else { return }
                 if let n = result as? Int, n <= 0 {
                     self.coverage = "No slide-linked sections found on this page"
                 }
@@ -212,13 +251,15 @@ struct WalkthroughPane: View {
         .onAppear { sync() }
         .onChange(of: model.page) { _, _ in sync() }
         .onChange(of: model.deckID) { _, _ in sync() }
-        .onChange(of: model.currentStudyPage?.path) { _, _ in sync() }
-        .onChange(of: model.followSlides) { _, on in if on { sync() } }
+        .onChange(of: model.currentStudyPage) { _, _ in sync() }
+        .onChange(of: model.libraryRevision) { _, _ in sync() }
+        .onChange(of: model.followSlides) { _, _ in sync() }
     }
 
     private func sync() {
         let deckFile = model.deck?.url.lastPathComponent ?? ""
         if let p = model.currentStudyPage, p.isPDF {
+            model.walk.show(nil, slide: model.page, follow: false)
             model.studyPDF.show(p, deckFile: deckFile, slide: model.page, follow: model.followSlides)
         } else {
             model.walk.deckFile = deckFile

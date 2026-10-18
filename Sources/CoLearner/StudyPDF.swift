@@ -14,14 +14,18 @@ final class StudyPDFController: ObservableObject {
     }()
     @Published private(set) var status: String?
     private var path: String?
+    private var revision: FileRevision?
     private var mapDeck: String?
     private var map: [Int: Int] = [:]
 
     func show(_ page: StudyPage, deckFile: String, slide: Int, follow: Bool) {
-        let fileChanged = page.path != path
-        if fileChanged {
+        let currentRevision = FileRevision.read(page.path)
+        let fileChanged = page.path != path || currentRevision != revision
+        if fileChanged || view.document == nil {
             path = page.path
-            view.document = PDFDocument(url: URL(fileURLWithPath: page.path))
+            view.document = currentRevision == nil ? nil : PDFDocument(url: URL(fileURLWithPath: page.path))
+            revision = view.document == nil ? nil : currentRevision
+            status = nil
         }
         // One notes file covers two decks (03a and 03b): the map belongs to the (file, deck) pair.
         if fileChanged || deckFile != mapDeck || map.isEmpty {
