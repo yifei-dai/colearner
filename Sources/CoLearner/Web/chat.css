@@ -38,12 +38,13 @@ body {
 button { font: inherit; color: inherit; cursor: pointer; }
 
 #head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px;
   padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-#where { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#where-deck { font-weight: 600; }
-#where-slide { color: var(--muted); margin-left: 6px; }
+/* In a narrow (popped-out) chat the deck title shortens first; "slide N / M" stays whole. */
+#where { flex: 1 1 150px; min-width: 0; display: flex; align-items: baseline; white-space: nowrap; overflow: hidden; }
+#where-deck { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#where-slide { color: var(--muted); margin-left: 6px; flex-shrink: 0; }
 .ghost { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
 .ghost:hover { color: var(--ink); }
 
@@ -191,3 +192,33 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
 .ticks span { cursor: pointer; min-width: 0; }
 .ticks span.on { color: var(--ink); font-weight: 600; }
+
+/* header: view toggle, history, new chat */
+#head-actions { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }   /* right-aligned, also on its own row */
+#viewseg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+#viewseg button { border: 0; background: none; padding: 1px 8px; font-size: 12px; color: var(--muted); }
+#viewseg button + button { border-left: 1px solid var(--line); }
+#viewseg button.on { background: var(--user); color: var(--ink); font-weight: 600; }
+.banner { font-size: 12px; color: var(--muted); background: var(--code-bg); border-radius: 8px; padding: 6px 9px; margin: 0 0 12px; }
+.banner button { background: none; border: 0; color: var(--accent); padding: 0; font-size: 12px; }
+.slidetag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; margin: 0 6px 3px 0; background: none; align-self: center; }
+.slidetag:hover { color: var(--accent); border-color: var(--accent); }
+.msg.user { align-items: flex-start; }
+.bubble img.area { display: block; max-width: 220px; max-height: 140px; border-radius: 6px; margin-bottom: 5px; border: 1px solid var(--line); }
+.ghostchip { color: var(--muted); }
+#areabox { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; padding: 5px 7px; border: 1px dashed var(--accent); border-radius: 9px; font-size: 12px; }
+#areabox img { max-height: 46px; max-width: 120px; border-radius: 4px; border: 1px solid var(--line); }
+#areabox #area-label { flex: 1; color: var(--ink); }
+.busynote { color: var(--muted); font-size: 12px; font-style: italic; }
+/* history popover rows */
+.hist { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.hist:hover { background: var(--user); }
+.hist .check { width: 14px; color: var(--accent); flex: 0 0 auto; }
+.hist .hmain { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.hist .hwhen { font-weight: 600; font-size: 12.5px; }
+.hist .hfirst { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist .hdel { background: none; border: 0; color: var(--muted); font-size: 12px; visibility: hidden; }
+.hist:hover .hdel { visibility: visible; }
+.hist .hdel:hover { color: var(--warn); }
+/* elements with their own display value still obey the hidden attribute */
+[hidden] { display: none !important; }

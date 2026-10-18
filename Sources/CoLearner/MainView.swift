@@ -3,9 +3,13 @@ import WebKit
 
 struct MainView: View {
     @EnvironmentObject var model: AppModel
+    @StateObject private var split = SplitState()
 
     var body: some View {
-        HSplitView {
+        // Slides : right panel = 3 : 2 at every launch. With Chat and Walkthrough both popped out, the slides
+        // fill the window.
+        let showRight = model.poppedOut.count < RightTab.allCases.count
+        SplitPanes(state: split, showRight: showRight) {
             VStack(spacing: 0) {
                 DeckBar()
                 Divider()
@@ -17,12 +21,33 @@ struct MainView: View {
                     WelcomeView()
                 }
             }
-            .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
-
+            .frame(maxHeight: .infinity)
+        } right: {
             RightPanel()
-                .frame(minWidth: 340, idealWidth: 440, maxWidth: 1000, maxHeight: .infinity)
+                .frame(maxHeight: .infinity)
         }
+        .frame(minWidth: showRight ? 860 : 480, minHeight: 560)
+        .background(WindowReader { [weak model] w in model?.mainWindow = w })
+        .onAppear { model.mainWindowAppeared() }
         .navigationTitle(model.deck.map { "\($0.title) — slide \(model.page)/\(model.pageCount)" } ?? "Co-learner")
+    }
+}
+
+/// Hands the window this view lives in to `onWindow` (AppModel.mainWindow), whatever else is on screen.
+private struct WindowReader: NSViewRepresentable {
+    let onWindow: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView { Probe(onWindow) }
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    final class Probe: NSView {
+        let onWindow: (NSWindow?) -> Void
+        init(_ f: @escaping (NSWindow?) -> Void) { onWindow = f; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { fatalError() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { onWindow(window) }
+        }
     }
 }
 
@@ -37,11 +62,7 @@ struct DeckBar: View {
                 ForEach(model.courses) { c in
                     Menu(c.name) {
                         ForEach(c.decks) { d in
-                            Button {
-                                model.open(d)
-                            } label: {
-                                Text(d.title + (d.walkthroughs.isEmpty ? "" : "  ·  walkthrough"))
-                            }
+                            Button(d.title) { model.open(d) }
                         }
                     }
                 }
@@ -53,21 +74,35 @@ struct DeckBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .hoverHighlight()
             .help("Pick a lecture deck")
 
             Divider().frame(height: 18)
 
-            ScrollView(.horizontal, showsIndicators: false) {
+            // Like a browser: + sits right after the last tab, and stays in view once the tabs need to scroll.
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: 4) {
-                    ForEach(model.openDecks) { d in
-                        DeckTab(deck: d, selected: d.path == model.deck?.path)
+                    tabs
+                    plusButton
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 4) {
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) { tabs }
+                        }
+                        .onAppear { scrollToCurrent(proxy) }
+                        .onChange(of: model.deck?.path) { _, _ in scrollToCurrent(proxy) }
+                        .onChange(of: model.newTab) { _, _ in scrollToCurrent(proxy) }
                     }
+                    plusButton
                 }
             }
 
             if model.document != nil {
                 HStack(spacing: 2) {
                     Button { model.go(-1) } label: { Image(systemName: "chevron.left") }
+                        .buttonStyle(IconButtonStyle())
                         .disabled(model.page <= 1)
                         .help("Previous slide (⌘[)")
                     Text("\(model.page) / \(model.pageCount)")
@@ -75,15 +110,51 @@ struct DeckBar: View {
                         .font(.callout)
                         .frame(minWidth: 54)
                     Button { model.go(1) } label: { Image(systemName: "chevron.right") }
+                        .buttonStyle(IconButtonStyle())
                         .disabled(model.page >= model.pageCount)
                         .help("Next slide (⌘])")
                 }
-                .buttonStyle(.borderless)
             }
+
+            Menu {
+                Picker("Appearance", selection: $model.appearance) {
+                    ForEach(AppModel.appearances, id: \.id) { a in Label(a.label, systemImage: a.icon).tag(a.id) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Image(systemName: AppModel.appearances.first { $0.id == model.appearance }?.icon ?? "circle.lefthalf.filled")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .hoverHighlight()
+            .help("Appearance: Automatic, Light or Dark")
         }
         .padding(.horizontal, 10)
         .frame(height: 38)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    @ViewBuilder private var tabs: some View {
+        ForEach(model.openDecks) { d in
+            DeckTab(deck: d, selected: d.path == model.deck?.path).id(d.path)
+        }
+        if model.newTab { NewTabChip(selected: model.deck == nil).id("newTab") }
+    }
+
+    private var plusButton: some View {
+        Button { model.openNewTab() } label: {
+            Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+        }
+        .buttonStyle(IconButtonStyle())
+        .fixedSize()
+        .help("New tab (⌘T)")
+    }
+
+    private func scrollToCurrent(_ proxy: ScrollViewProxy) {
+        let target = model.deck?.path ?? (model.newTab ? "newTab" : nil)
+        guard let target else { return }
+        DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(target) } }
     }
 }
 
@@ -91,25 +162,31 @@ private struct DeckTab: View {
     @EnvironmentObject var model: AppModel
     let deck: Deck
     let selected: Bool
+    @StateObject private var hover = HoverFlag()
 
     var body: some View {
         HStack(spacing: 4) {
             Text(courseTag + " " + deck.title)
                 .lineLimit(1)
+                .truncationMode(.tail)
                 .font(.callout.weight(selected ? .semibold : .regular))
+                .frame(maxWidth: 200, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             Button { model.close(deck) } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
             }
-            .buttonStyle(.borderless)
-            .opacity(selected ? 1 : 0.45)
-            .help("Close")
+            .buttonStyle(IconButtonStyle(size: 16, cornerRadius: 8))
+            .opacity(selected || hover.on ? 1 : 0.45)
+            .help("Close tab (⌘W)")
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color.accentColor.opacity(0.16) : Color.gray.opacity(0.07)))
+        .fixedSize(horizontal: true, vertical: false)   // as wide as the title (up to 200 pt), never stretched
+        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color.accentColor.opacity(0.16) : Color.gray.opacity(hover.on ? 0.16 : 0.07)))
         .contentShape(Rectangle())
-        .onTapGesture { model.open(deck) }
-        .help(deck.path)
+        .onHover { hover.on = $0 }
+        .onTapGesture { model.switchTo(deck) }
+        .help(deck.title + "\n" + deck.path)
     }
 
     private var courseTag: String {
@@ -120,6 +197,31 @@ private struct DeckTab: View {
         case "e4720": return "ML ·"
         default: return ""
         }
+    }
+}
+
+/// The "New Tab" tab: shows the lecture list until a lecture is picked.
+private struct NewTabChip: View {
+    @EnvironmentObject var model: AppModel
+    let selected: Bool
+    @StateObject private var hover = HoverFlag()
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("New Tab").lineLimit(1).font(.callout.weight(selected ? .semibold : .regular))
+            Button { model.closeNewTab() } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(IconButtonStyle(size: 16, cornerRadius: 8))
+            .opacity(selected || hover.on ? 1 : 0.45)
+            .help("Close tab (⌘W)")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Color.accentColor.opacity(0.16) : Color.gray.opacity(hover.on ? 0.16 : 0.07)))
+        .contentShape(Rectangle())
+        .onHover { hover.on = $0 }
+        .onTapGesture { model.showNewTab() }
     }
 }
 
@@ -144,12 +246,7 @@ struct WelcomeView: View {
                                 Button {
                                     model.open(d)
                                 } label: {
-                                    HStack(spacing: 4) {
-                                        Text(d.title).lineLimit(1)
-                                        if !d.walkthroughs.isEmpty {
-                                            Image(systemName: "book.pages").foregroundStyle(.secondary).help("Has a walkthrough")
-                                        }
-                                    }
+                                    Text(d.title).lineLimit(1)
                                 }
                                 .buttonStyle(.link)
                             }
@@ -170,35 +267,46 @@ struct RightPanel: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
+        let shown = model.shownRightTab
+        let docked = RightTab.allCases.filter { !model.poppedOut.contains($0) }
         VStack(spacing: 0) {
             HStack {
-                Picker("", selection: $model.rightTab) {
-                    Text("Chat").tag(RightTab.chat)
-                    Text(model.currentStudyPages.isEmpty ? "Walkthrough" : "Walkthrough (\(model.currentStudyPages.count))")
-                        .tag(RightTab.walkthrough)
+                if docked.count > 1 {
+                    Picker("", selection: $model.rightTab) {
+                        Text("Chat").tag(RightTab.chat)
+                        Text(walkthroughTitle).tag(RightTab.walkthrough)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 300)
+                } else {
+                    Text(shown == .chat ? "Chat" : walkthroughTitle).font(.callout.weight(.semibold))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 300)
             }
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity)
+            .overlay(alignment: .trailing) {
+                Button { model.popOut(shown) } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right").font(.system(size: 12))
+                }
+                .buttonStyle(IconButtonStyle(size: 24))
+                .accessibilityLabel("Pop out")
+                .padding(.trailing, 8)
+                .help("Pop out \(shown == .chat ? "the chat" : "the walkthrough") into its own window (drag it to another screen, like an iPad). Close that window to put it back.")
+            }
             .background(Color(nsColor: .windowBackgroundColor))
             Divider()
-            if model.rightTab == .chat {
-                WebViewHost(view: model.chat.webView)
+            if shown == .chat {
+                PanelHost(view: model.chat.webView)
             } else {
                 WalkthroughPane()
             }
         }
     }
-}
 
-/// Shows a WKWebView that lives elsewhere (so switching tabs never reloads it).
-struct WebViewHost: NSViewRepresentable {
-    let view: WKWebView
-    func makeNSView(context: Context) -> WKWebView { view }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    private var walkthroughTitle: String {
+        model.currentStudyPages.isEmpty ? "Walkthrough" : "Walkthrough (\(model.currentStudyPages.count))"
+    }
 }
 
 // MARK: - pop-out window for visuals
@@ -212,6 +320,7 @@ enum VisualWindow {
                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         w.title = "Visual"
         w.isReleasedWhenClosed = false
+        w.tabbingMode = .disallowed
         let wv = WKWebView(frame: .zero)
         wv.loadHTMLString(html, baseURL: nil)
         w.contentView = wv

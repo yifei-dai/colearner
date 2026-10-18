@@ -1,11 +1,11 @@
 import SwiftUI
 import PDFKit
 
-/// The big slide in the middle of the left pane.
+/// The big slide in the middle of the left pane, with an overlay for cutting out an area of it.
 struct SlideView: NSViewRepresentable {
     @EnvironmentObject var model: AppModel
 
-    func makeNSView(context: Context) -> PDFView {
+    func makeNSView(context: Context) -> NSView {
         let v = PDFView()
         v.displayMode = .singlePage
         v.displayDirection = .horizontal
@@ -17,10 +17,23 @@ struct SlideView: NSViewRepresentable {
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pageChanged(_:)),
                                                name: .PDFViewPageChanged, object: v)
         if let p = model.document?.page(at: model.page - 1) { v.go(to: p) }
-        return v
+
+        let container = NSView()
+        v.frame = container.bounds
+        v.autoresizingMask = [.width, .height]
+        container.addSubview(v)
+        let overlay = AreaSelectView(pdfView: v)
+        overlay.frame = container.bounds
+        overlay.autoresizingMask = [.width, .height]
+        overlay.isActive = { [weak model] in model?.selectingArea ?? false }
+        overlay.onSelect = { [weak model] page, rect in model?.finishAreaSelection(page: page, rect: rect) }
+        container.addSubview(overlay)
+        context.coordinator.overlay = overlay
+        return container
     }
 
-    func updateNSView(_ v: PDFView, context: Context) {
+    func updateNSView(_ container: NSView, context: Context) {
+        guard let v = context.coordinator.view else { return }
         let want = model.page   // read first: swapping documents makes PDFView report its old page index
         if v.document !== model.document {
             context.coordinator.swapping = true
@@ -28,6 +41,7 @@ struct SlideView: NSViewRepresentable {
             v.autoScales = true
             context.coordinator.swapping = false
         }
+        context.coordinator.overlay?.refresh(selecting: model.selectingArea)
         guard let doc = v.document, let target = doc.page(at: want - 1) else { return }
         if v.currentPage !== target { v.go(to: target) }
     }
@@ -37,6 +51,7 @@ struct SlideView: NSViewRepresentable {
     final class Coordinator: NSObject {
         let model: AppModel
         weak var view: PDFView?
+        weak var overlay: AreaSelectView?
         var swapping = false
         init(model: AppModel) { self.model = model }
 
@@ -46,6 +61,95 @@ struct SlideView: NSViewRepresentable {
             guard i != NSNotFound else { return }
             let idx = i + 1
             if idx != model.page { model.page = idx }
+        }
+    }
+}
+
+/// Transparent layer over the slide. It takes the mouse only while an area is being selected (after
+/// "Select area" / ⌘⇧A) or while ⌥ is held, so normal clicks, scrolling and arrow keys go to the slide.
+final class AreaSelectView: NSView {
+    weak var pdfView: PDFView?
+    var isActive: () -> Bool = { false }
+    var onSelect: (PDFPage, CGRect) -> Void = { _, _ in }
+    private var start: NSPoint?
+    private var current: NSPoint?
+    /// The drag began in selection mode (so Esc, which ends the mode, cancels it).
+    private var startedInMode = false
+
+    init(pdfView: PDFView) {
+        self.pdfView = pdfView
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    private var selecting: Bool { isActive() || start != nil }
+
+    /// A drag in selection mode works even if the window wasn't key yet (selection started from a pop-out).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { isActive() || NSEvent.modifierFlags.contains(.option) }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // ⌥-drag works any time; otherwise only in selection mode.
+        guard isActive() || NSEvent.modifierFlags.contains(.option) else { return nil }
+        return super.hitTest(point)
+    }
+
+    func refresh(selecting: Bool) {
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    override func resetCursorRects() {
+        if isActive() { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    override func mouseDown(with e: NSEvent) {
+        start = convert(e.locationInWindow, from: nil)
+        current = start
+        startedInMode = isActive()
+        needsDisplay = true
+    }
+
+    override func mouseDragged(with e: NSEvent) {
+        current = convert(e.locationInWindow, from: nil)
+        needsDisplay = true
+    }
+
+    override func mouseUp(with e: NSEvent) {
+        defer { start = nil; current = nil; needsDisplay = true }
+        guard let s = start, let pdf = pdfView, !(startedInMode && !isActive()) else { return }
+        let r = band(s, convert(e.locationInWindow, from: nil))
+        guard r.width > 6, r.height > 6 else { return }
+        let inPDF = convert(r, to: pdf)
+        guard let page = pdf.page(for: NSPoint(x: inPDF.midX, y: inPDF.midY), nearest: true) else { return }
+        onSelect(page, pdf.convert(inPDF, to: page).standardized)
+    }
+
+    private func band(_ a: NSPoint, _ b: NSPoint) -> NSRect {
+        NSRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard selecting, !(startedInMode && !isActive()) else { return }
+        if let s = start, let c = current {
+            let r = band(s, c)
+            NSColor.controlAccentColor.withAlphaComponent(0.15).setFill()
+            r.fill()
+            let path = NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5))
+            path.lineWidth = 1.5
+            path.setLineDash([5, 3], count: 2, phase: 0)
+            NSColor.controlAccentColor.setStroke()
+            path.stroke()
+        } else if isActive() {
+            // A hint while waiting for the drag.
+            let text = "Drag over the part of the slide you want · Esc to cancel" as NSString
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white]
+            let size = text.size(withAttributes: attrs)
+            let box = NSRect(x: (bounds.width - size.width) / 2 - 10, y: 10, width: size.width + 20, height: size.height + 8)
+            NSColor.black.withAlphaComponent(0.6).setFill()
+            NSBezierPath(roundedRect: box, xRadius: 7, yRadius: 7).fill()
+            text.draw(at: NSPoint(x: box.minX + 10, y: box.minY + 4), withAttributes: attrs)
         }
     }
 }

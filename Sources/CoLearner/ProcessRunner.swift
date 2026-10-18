@@ -98,6 +98,7 @@ final class ProcessRunner: @unchecked Sendable {
     }
 
     var isRunning: Bool { process.isRunning }
+    var exitStatus: Int32? { process.isRunning ? nil : process.terminationStatus }
 
     /// Blocks until *some* bytes arrive and returns them; nil at end of file or on error.
     /// (FileHandle.read(upToCount:) would wait for the full count, which stalls streaming output.)

@@ -204,9 +204,9 @@ struct WalkthroughPane: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.currentStudyPage?.isPDF == true {
-                PDFViewHost(view: model.studyPDF.view)
+                PanelHost(view: model.studyPDF.view)
             } else {
-                WebViewHost(view: model.walk.webView)
+                PanelHost(view: model.walk.webView)
             }
         }
         .onAppear { sync() }
@@ -256,8 +256,4 @@ private struct PDFStatusLine: View {
     }
 }
 
-struct PDFViewHost: NSViewRepresentable {
-    let view: PDFView
-    func makeNSView(context: Context) -> PDFView { view }
-    func updateNSView(_ nsView: PDFView, context: Context) {}
-}
+

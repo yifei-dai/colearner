@@ -12,7 +12,12 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private(set) var webView: WKWebView!
     private var ready = false
     private var running: [String: RunHandle] = [:]          // assistant message id -> process
-    private var runWhere: [String: (deck: String, page: Int)] = [:]
+    private var stopping: [String: RunHandle] = [:]         // stopped, process not exited yet
+    private var saved = Set<String>()                        // runs whose turn completed (in the session)
+    private var runWhere: [String: (deck: String, conv: String)] = [:]
+    /// What an assistant had seen before a run; put back if the run is stopped or fails (it may never have
+    /// reached the session).
+    private var seenBefore: [String: (provider: Provider, fresh: Bool, by: [String]?, slides: [Int]?)] = [:]
     private var dirty: [String: ChatMessage] = [:]
     private var flushScheduled = false
     /// Last plan usage per assistant (kept across launches). Updated after every answer and on demand.
@@ -177,32 +182,49 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     func focusInput() {
+        // A popped-out chat window has to become key to take typing.
+        if NSApp.isActive, let w = webView.window, !w.isKeyWindow { w.makeKeyAndOrderFront(nil) }
         webView.window?.makeFirstResponder(webView)
         guard ready else { return }
         webView.evaluateJavaScript("window.CL && CL.focusInput()", completionHandler: nil)
     }
 
-    /// Re-render the chat panel for the slide on screen.
+    /// Re-render the chat panel: the deck's current conversation (chat.js shows this slide's part, or all).
     func showCurrent() {
         guard ready else { return }
+        // Send queued updates first (in order), so the page's copy is current when setThread compares.
+        for (_, m) in dirty { js("upsertMessage", m.js) }
         dirty.removeAll()
         guard let d = model.deck else {
-            js("setThread", ["hasDeck": false, "messages": [], "others": [], "provider": model.provider])
+            area = nil
+            js("setThread", ["hasDeck": false, "messages": [], "pages": [], "provider": model.provider, "history": [],
+                             "area": NSNull(), "conversation": NSNull()] as [String: Any])
             return
         }
-        let t = store.thread(d.path, model.page)
+        // A selected area belongs to its slide; moving on drops it.
+        if let a = area, a.deck != d.path || a.page != model.page { area = nil }
+        let conv = store.current(d.path)
+        var areaJS: Any = NSNull()
+        if let a = area { areaJS = ["page": a.page, "thumb": a.thumb] }
         js("setThread", [
             "hasDeck": true, "deckTitle": d.title, "page": model.page, "pageCount": model.pageCount,
-            "messages": t.messages.map(\.js), "others": store.pagesWithChats(d.path), "provider": model.provider,
+            "messages": conv.messages.map(\.js), "pages": conv.pages, "provider": model.provider,
+            "conversation": ["id": conv.id, "legacy": conv.legacy ?? false, "created": conv.created.timeIntervalSince1970],
+            "history": store.conversations(d.path).map { c -> [String: Any] in
+                ["id": c.id, "created": c.created.timeIntervalSince1970, "count": c.messages.filter { $0.role == .user }.count,
+                 "legacy": c.legacy ?? false, "current": c.id == conv.id,
+                 "first": c.messages.first(where: { $0.role == .user }).map { $0.display ?? String($0.text.prefix(60)) } ?? ""]
+            },
+            "area": areaJS,
         ] as [String: Any])
     }
 
-    private func isVisible(_ deck: String, _ page: Int) -> Bool {
-        model.deck?.path == deck && model.page == page
+    private func isVisible(_ deck: String, _ conv: String) -> Bool {
+        model.deck?.path == deck && store.current(deck).id == conv
     }
 
-    private func push(_ m: ChatMessage, deck: String, page: Int, immediate: Bool = false) {
-        guard isVisible(deck, page) else { return }
+    private func push(_ m: ChatMessage, deck: String, conv: String, immediate: Bool = false) {
+        guard isVisible(deck, conv) else { return }
         if immediate {
             dirty.removeValue(forKey: m.id)
             js("upsertMessage", m.js)
@@ -218,6 +240,24 @@ final class ChatController: NSObject, WKNavigationDelegate {
                 self.dirty.removeAll()
             }
         }
+    }
+
+    // MARK: selected area
+
+    /// An area of a slide the user cut out (button "Select area", or ⌥-drag on the slide).
+    struct Area { var deck: String; var page: Int; var url: URL; var thumb: String }
+    private(set) var area: Area?
+
+    func setArea(page: Int, url: URL, thumb: String) {
+        guard let d = model.deck else { return }
+        area = Area(deck: d.path, page: page, url: url, thumb: thumb)
+        js("setArea", ["page": page, "thumb": thumb])
+        DispatchQueue.main.async { [weak self] in self?.focusInput() }
+    }
+
+    func clearArea() {
+        area = nil
+        js("setArea", NSNull())
     }
 
     func handle(_ body: [String: Any]) {
@@ -254,13 +294,28 @@ final class ChatController: NSObject, WKNavigationDelegate {
             let display = body["display"] as? String
             let p = body["provider"] as? String ?? model.provider
             if p != model.provider { model.provider = p }
-            send(text: text, display: display, choice: p)
+            send(text: text, display: display, choice: p, useArea: body["useArea"] as? Bool ?? true)
         case "stop":
-            stopVisible()
+            let ps = (body["providers"] as? [String])?.compactMap(Provider.init(rawValue:))
+            stopVisible(providers: ps.map(Set.init))
         case "gotoSlide":
             if let p = body["page"] as? Int { model.page = p }
-        case "clearThread":
-            clearVisible()
+        case "selectArea":
+            model.beginAreaSelection()
+        case "clearArea":
+            clearArea()
+        case "newChat":
+            guard let d = model.deck else { return }
+            store.startNew(d.path)
+            model.refreshChatPages()
+            showCurrent()
+        case "openChat":
+            guard let d = model.deck, let id = body["id"] as? String else { return }
+            store.setCurrent(d.path, id)
+            model.refreshChatPages()
+            showCurrent()
+        case "deleteChat":
+            if let id = body["id"] as? String { deleteChat(id) }
         case "setProvider":
             if let p = body["provider"] as? String { model.provider = p }
         case "copy":
@@ -281,76 +336,111 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     // MARK: sending
 
-    func send(text: String, display: String?, choice: String) {
+    private var prerendered = Set<String>()
+
+    /// One conversation per deck. Each assistant's session gets the deck's text once, then only what it hasn't
+    /// seen: the image of the slide the student is on, images of slides the question mentions, a selected area, and
+    /// the other assistant's messages.
+    func send(text: String, display: String?, choice: String, useArea: Bool) {
         guard let deck = model.deck, let doc = model.document else { return }
-        let page = model.page
+        let page = model.page, count = model.pageCount
         let providers: [Provider] = choice == "both" ? [.claude, .codex] : [Provider(rawValue: choice) ?? .claude]
-        let before = store.thread(deck.path, page)
-        // Only the assistants being asked must be free (in Both mode Claude often finishes long before ChatGPT).
-        if before.messages.contains(where: { $0.status == .streaming && providers.contains($0.provider ?? .claude) }) { return }
+        let conv = store.current(deck.path)
+        // Only the assistants being asked must be free (one session can't answer two questions at once).
+        if conv.messages.contains(where: { $0.status == .streaming && providers.contains($0.provider ?? .claude) }) { return }
+        let convID = conv.id
+        let areaNow = useArea ? area.flatMap { $0.deck == deck.path && $0.page == page ? $0 : nil } : nil
 
-        var context: SlideContext?
-        let user = ChatMessage(role: .user, text: text, display: display)
-        store.update(deck.path, page) { $0.messages.append(user) }
-        push(user, deck: deck.path, page: page, immediate: true)
-        // Everything finished so far on this slide (answers still streaming are not "said" yet).
-        let prior = before.messages.filter { $0.status != .streaming && !$0.text.isEmpty }
+        var user = ChatMessage(role: .user, text: text, display: display)
+        user.page = page
+        user.areaThumb = areaNow?.thumb
+        // Everything finished so far (answers still streaming are not "said" yet).
+        let prior = conv.messages.filter { $0.status != .streaming && !$0.text.isEmpty }
+        store.update(deck.path, convID) { $0.messages.append(user) }
+        push(user, deck: deck.path, conv: convID, immediate: true)
+        if areaNow != nil { clearArea() }   // an area goes with one question
 
+        let mentioned = DeckContext.referencedSlides(in: text, pageCount: count)
         for p in providers {
-            let resume = before.session(for: p)
-            var prompt: String
-            var image: URL?
-            if resume == nil {
-                if context == nil { context = SlideContext.make(deck: deck, document: doc, page: page, texts: model.slideTexts) }
-                guard let ctx = context else { continue }
-                prompt = ctx.promptHeader(includeFiles: p == .claude)
-                    + transcript(Array(prior.suffix(8)), tag: "earlier_conversation_on_this_slide")
-                    + "<question>\n\(text)\n</question>"
-                image = ctx.pngURL
+            let resume = conv.session(for: p)
+            let fresh = resume == nil
+            let seenSlides = fresh ? [] : Set(conv.seenSlides?[p.rawValue] ?? [])
+            var prompt = ""
+            if fresh {
+                prompt += DeckContext.header(deck: deck, texts: model.slideTexts, includeFiles: p == .claude)
+                prompt += transcript(Array(prior.suffix(12)), tag: "earlier_conversation_about_this_deck")
             } else {
-                // The session already has its own turns; add what it hasn't seen: the other assistant's answers
-                // (so "ChatGPT says 2 solutions, you say 4" works) and questions that were sent only to the other one.
-                let seen = Set(before.seenBy?[p.rawValue] ?? prior.map(\.id))
-                let missed = prior.filter { !seen.contains($0.id) && $0.provider != p }
-                prompt = missed.isEmpty ? text
-                    : transcript(missed, tag: "messages_on_this_slide_you_have_not_seen") + "<question>\n\(text)\n</question>"
+                // The session has its own turns; add what it hasn't seen: the other assistant's answers and
+                // questions that were sent only to the other one.
+                let seen = Set(conv.seenBy?[p.rawValue] ?? prior.map(\.id))
+                let unseen = prior.filter { !seen.contains($0.id) && ($0.provider != p || $0.notInSession == true) }
+                prompt += transcript(unseen, tag: "messages_in_this_chat_you_have_not_seen", you: p)
             }
-            store.update(deck.path, page) { t in
-                var map = t.seenBy ?? [:]
-                map[p.rawValue] = prior.map(\.id) + [user.id]
-                t.seenBy = map
+            var images: [URL] = []
+            var shown: [Int] = []
+            for n in [page] + mentioned where !seenSlides.contains(n) && !shown.contains(n) && shown.count < 5 {
+                if let u = SlideImages.png(deck: deck, document: doc, page: n) { images.append(u); shown.append(n) }
+            }
+            if let a = areaNow { images.append(a.url) }
+            var note = "[The student is on slide \(page) of \(count).]"
+            var parts = shown.map { "slide \($0)" }
+            if areaNow != nil { parts.append("the area of slide \(page) the student selected") }
+            if !parts.isEmpty { note += " Attached images, in order: " + parts.joined(separator: ", ") + "." }
+            if areaNow != nil { note += " The question is about the selected area." }
+            prompt += note + "\n<question>\n\(text)\n</question>"
+
+            let before = (provider: p, fresh: fresh, by: conv.seenBy?[p.rawValue], slides: conv.seenSlides?[p.rawValue])
+            store.update(deck.path, convID) { c in
+                var sb = c.seenBy ?? [:]
+                sb[p.rawValue] = prior.map(\.id) + [user.id]
+                c.seenBy = sb
+                var ss = c.seenSlides ?? [:]
+                ss[p.rawValue] = Array(Set(seenSlides).union(shown)).sorted()
+                c.seenSlides = ss
             }
             var a = ChatMessage(role: .assistant, provider: p, text: "", status: .streaming)
             a.activity = "starting…"
+            a.page = page
             let (mid, eff) = p == .claude ? (model.claudeModel, model.claudeEffort) : (model.codexModel, model.codexEffort)
             a.model = ModelCatalog.label(p, mid) + " · " + eff
-            store.update(deck.path, page) { $0.messages.append(a) }
-            push(a, deck: deck.path, page: page, immediate: true)
+            seenBefore[a.id] = before
+            store.update(deck.path, convID) { $0.messages.append(a) }
+            push(a, deck: deck.path, conv: convID, immediate: true)
 
-            let req = BackendRequest(
-                prompt: prompt, instructions: Prompts.tutor, imageURL: image, resume: resume,
-                model: mid, effort: eff,
-                readableDirs: readableDirs(for: deck))
+            var dirs = readableDirs(for: deck)
+            if p == .claude { dirs.append(SlideImages.folder(for: deck)) }
+            let req = BackendRequest(prompt: prompt, instructions: Prompts.tutor, imageURLs: images, resume: resume,
+                                     model: mid, effort: eff, readableDirs: dirs)
             let id = a.id
             let backend: Backend = p == .claude ? claude : codex
-            runWhere[id] = (deck.path, page)
+            runWhere[id] = (deck.path, convID)
             let handle = backend.start(req) { [weak self] ev in
-                self?.apply(ev, id: id, provider: p, deck: deck.path, page: page, usedResume: resume)
+                self?.apply(ev, id: id, provider: p, deck: deck.path, conv: convID, usedResume: resume)
             }
             if let handle { running[id] = handle }
+        }
+        // Claude may open any slide image of the deck; make them all once (in the background).
+        let slideDir = SlideImages.folder(for: deck).path
+        if !prerendered.contains(slideDir) {
+            prerendered.insert(slideDir)
+            SlideImages.prerenderAll(deck: deck)
         }
         store.save(deck.path)
         model.refreshChatPages()
     }
 
     /// Earlier messages as a quoted block, for an assistant that has not seen them.
-    private func transcript(_ msgs: [ChatMessage], tag: String) -> String {
+    private func transcript(_ msgs: [ChatMessage], tag: String, you: Provider? = nil) -> String {
         guard !msgs.isEmpty else { return "" }
         var s = "<\(tag)>\n"
         for m in msgs {
-            let who = m.role == .user ? "Student" : (m.provider?.displayName ?? "Assistant")
+            var who = m.role == .user ? "Student" : (m.provider?.displayName ?? "Assistant")
+            if m.role == .assistant, let you, m.provider == you {
+                who += " (your own earlier answer as the student saw it; it was cut off before it reached you)"
+            }
+            let whereAt = m.page.map { ", slide \($0)" } ?? ""
             let body = m.text.count > 2500 ? String(m.text.prefix(2500)) + " …" : m.text
-            s += "[\(who)]: \(body)\n\n"
+            s += "[\(who)\(whereAt)]: \(body)\n\n"
         }
         return s + "</\(tag)>\n\n"
     }
@@ -363,42 +453,48 @@ final class ChatController: NSObject, WKNavigationDelegate {
         return dirs.sorted().map { URL(fileURLWithPath: $0) }
     }
 
-    private func apply(_ ev: BackendEvent, id: String, provider: Provider, deck: String, page: Int, usedResume: String?) {
+    private func apply(_ ev: BackendEvent, id: String, provider: Provider, deck: String, conv: String, usedResume: String?) {
         if case .usage(let w) = ev { setUsage(provider, w); return }
+        if case .saved = ev { saved.insert(id); return }
         var updated: ChatMessage?
         var finished = false
         var sessionChanged = false
-        store.update(deck, page) { t in
+        store.update(deck, conv) { t in
             guard let i = t.messages.firstIndex(where: { $0.id == id }) else { return }
             var m = t.messages[i]
             switch ev {
             case .session(let s):
-                t.setSession(s, for: provider)
+                // A stopped run's late session id must not replace the one a newer question is using.
+                guard running[id] != nil else { break }
+                if t.session(for: provider) != s { t.setSession(s, for: provider) }
                 sessionChanged = true
             case .model(let name):
                 m.model = name
             case .delta(let s):
                 m.text += s
-                m.activity = nil
+                if stopping[id] == nil { m.activity = nil }   // keep "stopping…"
             case .replace(let s):
                 m.text = s
             case .activity(let a):
-                m.activity = a
+                if stopping[id] == nil { m.activity = a }
             case .finished:
                 if m.status == .streaming {
-                    m.status = running[id] == nil ? .stopped : (m.text.isEmpty ? .error : .done)
+                    // Stopped, unless the turn had already completed when Stop was pressed.
+                    m.status = running[id] == nil && !saved.contains(id) ? .stopped : (m.text.isEmpty ? .error : .done)
                     if m.status == .error { m.error = "No answer came back." }
                 }
                 m.activity = nil
                 finished = true
-            case .usage:
+            case .usage, .saved:
                 break   // handled before the update
+            case .notKept:
+                if !m.text.isEmpty { m.notInSession = true }
             case .failed(let e):
                 m.status = .error
                 m.error = e
                 m.activity = nil
                 finished = true
-                // Only a missing/broken session is dropped (then the next question re-sends the slide);
+                // Only a missing/broken session is dropped (then the next question re-sends the deck);
                 // limits, overload and network errors keep it.
                 let l = e.lowercased()
                 if usedResume != nil,
@@ -409,67 +505,132 @@ final class ChatController: NSObject, WKNavigationDelegate {
             }
             t.messages[i] = m
             updated = m
+            if finished {
+                if m.status == .done { seenBefore[id] = nil } else { rollBackSeen(id, &t) }
+            }
         }
         if finished {
             running.removeValue(forKey: id)
+            stopping.removeValue(forKey: id)
+            saved.remove(id)
             runWhere.removeValue(forKey: id)
         }
         if finished || sessionChanged { store.save(deck) }
-        if let updated { push(updated, deck: deck, page: page, immediate: finished) }
+        if let updated { push(updated, deck: deck, conv: conv, immediate: finished) }
     }
 
-    func stopVisible() {
+    /// A stopped or failed run: the assistant's session may not have taken in this turn, so it hasn't "seen"
+    /// what was sent with it. A session that this run started is dropped (the next question starts afresh).
+    private func rollBackSeen(_ id: String, _ c: inout Conversation) {
+        guard let b = seenBefore.removeValue(forKey: id) else { return }
+        if b.fresh { c.setSession(nil, for: b.provider); return }
+        guard c.session(for: b.provider) != nil else { return }
+        var sb = c.seenBy ?? [:]
+        sb[b.provider.rawValue] = b.by
+        c.seenBy = sb
+        var ss = c.seenSlides ?? [:]
+        ss[b.provider.rawValue] = b.slides
+        c.seenSlides = ss
+    }
+
+    /// Stop: the answers still running in the deck's current conversation (on any slide), from the assistants
+    /// being asked (`providers`; nil = all). In Both mode a follow-up to Claude alone doesn't stop ChatGPT.
+    func stopVisible(providers: Set<Provider>? = nil) {
         guard let d = model.deck else { return }
-        let page = model.page
-        for (id, w) in runWhere where w.deck == d.path && w.page == page {
-            if let h = running.removeValue(forKey: id) { h.cancel() }
-            store.update(d.path, page) { t in
-                if let i = t.messages.firstIndex(where: { $0.id == id }), t.messages[i].status == .streaming {
-                    t.messages[i].status = .stopped
-                    t.messages[i].activity = nil
+        let conv = store.current(d.path), convID = conv.id
+        for (id, w) in runWhere where w.deck == d.path && w.conv == convID {
+            if let providers, let p = conv.messages.first(where: { $0.id == id })?.provider, !providers.contains(p) { continue }
+            guard let h = running.removeValue(forKey: id) else { continue }   // already stopping
+            stopping[id] = h
+            h.cancel()
+            // The answer stays "stopping…" (so that assistant takes no new question) until its CLI has exited:
+            // Claude Code saves the partial answer to the session first. apply(.finished) then marks it stopped
+            // and settles what the assistant has seen, knowing whether the partial answer was kept.
+            store.update(d.path, convID) { c in
+                if let i = c.messages.firstIndex(where: { $0.id == id }), c.messages[i].status == .streaming {
+                    c.messages[i].activity = "stopping…"
                 }
             }
-            if let m = store.thread(d.path, page).messages.first(where: { $0.id == id }) {
-                push(m, deck: d.path, page: page, immediate: true)
+            if let m = store.current(d.path).messages.first(where: { $0.id == id }) {
+                push(m, deck: d.path, conv: convID, immediate: true)
             }
+            // cancel() ends the process within ~3 s (SIGINT, then SIGTERM, then SIGKILL); if no exit is ever
+            // reported, close the answer anyway.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.forceStopped(id) }
         }
-        store.save(d.path)
     }
 
-    private func clearVisible() {
-        guard let d = model.deck else { return }
-        let page = model.page
-        let t = store.thread(d.path, page)
-        guard !t.messages.isEmpty else { return }
+    /// Safety net for a stopped run whose exit was never reported.
+    private func forceStopped(_ id: String) {
+        guard let w = runWhere[id], running[id] == nil else { return }
+        runWhere.removeValue(forKey: id)
+        stopping.removeValue(forKey: id)?.terminateNow()
+        saved.remove(id)
+        store.update(w.deck, w.conv) { c in
+            if let i = c.messages.firstIndex(where: { $0.id == id }), c.messages[i].status == .streaming {
+                c.messages[i].status = .stopped
+                c.messages[i].activity = nil
+            }
+            rollBackSeen(id, &c)
+        }
+        store.save(w.deck)
+        if let m = store.conversation(w.deck, w.conv)?.messages.first(where: { $0.id == id }) {
+            push(m, deck: w.deck, conv: w.conv, immediate: true)
+        }
+    }
+
+    private func deleteChat(_ id: String) {
+        guard let d = model.deck, let c = store.conversation(d.path, id) else { return }
         let a = NSAlert()
-        a.messageText = "Delete the chat on slide \(page)?"
-        a.informativeText = "This removes \(t.messages.count) messages. It can't be undone."
+        a.messageText = "Delete this chat?"
+        a.informativeText = "It has \(c.messages.filter { $0.role == .user }.count) questions. This can't be undone."
         a.addButton(withTitle: "Delete")
         a.addButton(withTitle: "Cancel")
         guard a.runModal() == .alertFirstButtonReturn else { return }
-        for (id, w) in runWhere where w.deck == d.path && w.page == page {
-            running.removeValue(forKey: id)?.cancel()
-            runWhere.removeValue(forKey: id)
+        for (rid, w) in runWhere where w.deck == d.path && w.conv == id {
+            running.removeValue(forKey: rid)?.cancel()
+            stopping.removeValue(forKey: rid)
+            saved.remove(rid)
+            runWhere.removeValue(forKey: rid)
+            seenBefore.removeValue(forKey: rid)
         }
-        store.clear(d.path, page)
+        store.delete(d.path, id)
         model.refreshChatPages()
         showCurrent()
     }
 
     /// On quit: keep what has streamed so far, mark it stopped, save, and end the CLIs right away.
     func stopAll() {
+        // Stop the way the Stop button does (SIGINT), so Claude Code keeps the partial answer in its session;
+        // give the CLIs a moment, then end whatever is still running.
+        for (id, h) in running { h.cancel(); stopping[id] = h }
+        running.removeAll()   // apply(.finished) now reads these as stopped, unless the turn was saved
+        let all = stopping
+        let deadline = Date().addingTimeInterval(1.5)
+        // Spin the run loop (not sleep) so queued output and exit reports reach apply() and settle each run;
+        // apply(.finished) removes a run from `stopping` (and `runWhere`) once its exit is in.
+        while !stopping.isEmpty && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
         var decks = Set<String>()
         for (id, w) in runWhere {
-            store.update(w.deck, w.page) { t in
-                if let i = t.messages.firstIndex(where: { $0.id == id }), t.messages[i].status == .streaming {
-                    t.messages[i].status = .stopped
-                    t.messages[i].activity = nil
+            let h = all[id]
+            let done = saved.contains(id)
+            let lost = !done && (h.map { $0.isRunning || ($0.exitStatus ?? 0) != 0 } ?? false)
+            store.update(w.deck, w.conv) { c in
+                if let i = c.messages.firstIndex(where: { $0.id == id }), c.messages[i].status == .streaming {
+                    c.messages[i].status = done ? .done : .stopped
+                    c.messages[i].activity = nil
+                    if lost, c.messages[i].provider == .claude, !c.messages[i].text.isEmpty { c.messages[i].notInSession = true }
                 }
+                if done { seenBefore[id] = nil } else { rollBackSeen(id, &c) }
             }
             decks.insert(w.deck)
         }
         for d in decks { store.save(d) }
-        for (_, h) in running { h.terminateNow() }
+        for (_, h) in all where h.isRunning { h.terminateNow() }
+        stopping.removeAll()
+        saved.removeAll()
         running.removeAll()
         runWhere.removeAll()
     }

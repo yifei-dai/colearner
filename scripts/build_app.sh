@@ -3,7 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 tools/make_library.py >/dev/null
-swift build -c release 2>&1 | grep -v "search path .* not found" || true
+rm -f .build/release/CoLearner   # so a failed build can't package the previous binary
+swift build -c release 2>&1 | { grep -v "search path .* not found" || true; }
 test -x .build/release/CoLearner
 APP=build/Co-learner.app
 rm -rf "$APP"
@@ -33,7 +34,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+# Sign with the local certificate when it exists: macOS then keeps the Desktop-folder permission across
+# rebuilds (an ad-hoc signature is a new app to macOS every build, so it asks again).
+# One-time setup: see "Signing" in README.md.
+IDENTITY="Co-learner Local Signing"
+if security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
+  if err=$(codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP" 2>&1); then
+    echo "signed with \"$IDENTITY\""
+  else
+    printf 'signing with "%s" failed:\n%s\n' "$IDENTITY" "$err" >&2
+    if ! err=$(codesign --force --deep --sign - "$APP" 2>&1); then printf 'ad-hoc signing failed too:\n%s\n' "$err" >&2; exit 1; fi
+    echo "signed ad-hoc instead (macOS will ask for Desktop access again)" >&2
+  fi
+else
+  if ! err=$(codesign --force --deep --sign - "$APP" 2>&1); then printf 'ad-hoc signing failed:\n%s\n' "$err" >&2; exit 1; fi
+  echo "signed ad-hoc (no \"$IDENTITY\" certificate: macOS will ask for Desktop access after each rebuild)"
+fi
+codesign --verify --deep --strict "$APP"
 echo "built $APP"
 if [ "${1:-}" = "--install" ]; then
   mkdir -p "$HOME/Applications"

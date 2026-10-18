@@ -10,27 +10,45 @@ struct CoLearnerApp: App {
         Window("Co-learner", id: "main") {
             MainView()
                 .environmentObject(model)
-                .frame(minWidth: 1000, minHeight: 620)
                 .onAppear { delegate.model = model }
         }
         .defaultSize(width: 1440, height: 860)
         .commands {
             CommandGroup(replacing: .newItem) {
+                Button("New Tab") { model.openNewTab() }.keyboardShortcut("t")
                 Button("Open PDF…") { model.openPDFPanel() }.keyboardShortcut("o")
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button("Close Tab") { model.closeCurrentTab() }.keyboardShortcut("w")
+            }
+            CommandGroup(before: .toolbar) {
+                Picker("Appearance", selection: $model.appearance) {
+                    ForEach(AppModel.appearances, id: \.id) { a in Text(a.label).tag(a.id) }
+                }
+                Divider()
             }
             CommandMenu("Slides") {
                 Button("Next Slide") { model.go(1) }.keyboardShortcut("]", modifiers: .command)
                 Button("Previous Slide") { model.go(-1) }.keyboardShortcut("[", modifiers: .command)
                 Divider()
                 Button("Ask About This Slide") {
-                    model.rightTab = .chat
+                    model.showPanel(.chat)
                     // The chat view is only back in the window after this update; focus it then.
                     DispatchQueue.main.async { model.chat.focusInput() }
                 }.keyboardShortcut("l", modifiers: .command)
-                Button("Show Walkthrough") { model.rightTab = .walkthrough }
+                Button("Select Area of Slide…") { model.beginAreaSelection() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("Show Walkthrough") { model.showPanel(.walkthrough) }
                     .keyboardShortcut("2", modifiers: .command)
-                Button("Show Chat") { model.rightTab = .chat }
+                Button("Show Chat") { model.showPanel(.chat) }
                     .keyboardShortcut("1", modifiers: .command)
+                Divider()
+                Button(model.poppedOut.contains(.chat) ? "Put Chat Back" : "Pop Out Chat") { model.togglePopOut(.chat) }
+                    .keyboardShortcut("1", modifiers: [.command, .option])
+                Button(model.poppedOut.contains(.walkthrough) ? "Put Walkthrough Back" : "Pop Out Walkthrough") {
+                    model.togglePopOut(.walkthrough)
+                }
+                .keyboardShortcut("2", modifiers: [.command, .option])
                 Divider()
                 Button("Reload Library") { model.reloadLibrary() }.keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -49,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         signal(SIGPIPE, SIG_IGN)
         // Also needed when started as a bare executable (swift run) instead of an .app.
         NSApp.setActivationPolicy(.regular)
+        // Pop-outs and visuals are separate windows on purpose (no "Merge All Windows" / tab bar).
+        NSWindow.allowsAutomaticWindowTabbing = false
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -58,7 +78,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { model?.chat.stopAll() }
+        MainActor.assumeIsolated {
+            model?.chat.stopAll()
+            // Pop-outs AppKit closes at quit stay "popped out" for the next launch (even with the main window closed).
+            model?.popOuts.closeAllForQuit()
+        }
     }
 }
 
@@ -83,6 +107,12 @@ struct SettingsView: View {
                 Picker("Reasoning effort", selection: $model.codexEffort) {
                     ForEach(ModelCatalog.model(.codex, model.codexModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
                 }
+            }
+            Section("Appearance") {
+                Picker("Appearance", selection: $model.appearance) {
+                    ForEach(AppModel.appearances, id: \.id) { a in Text(a.label).tag(a.id) }
+                }
+                .pickerStyle(.segmented)
             }
             Section("Files") {
                 LabeledContent("Chats are saved in", value: AppPaths.chats.path)

@@ -7,32 +7,34 @@
   const input = $("#input");
   const sendBtn = $("#btn-send");
 
-  const QUICK = {
-    explain: {
-      display: "Explain this slide",
-      prompt:
-        "Explain this slide to me. Start with the one-sentence takeaway. Then go through it piece by piece: " +
-        "define every symbol, say in words what each equation or figure means, and connect it to the slides " +
-        "just before and after when that helps.",
-    },
-    visualize: {
-      display: "Visualize it",
-      prompt:
-        "Visualize the key idea of this slide. Make ONE self-contained interactive visual as a single ```html " +
-        "code block (inline SVG or canvas + vanilla JS, sliders or buttons where they help, no external files). " +
-        "After the block, say in 2-3 sentences what to look at and what to try.",
-    },
-    derive: {
-      display: "Derive step by step",
-      prompt:
-        "Derive the main result on this slide step by step. Number the steps, justify each one in words, " +
-        "and do not skip algebra. Finish with what the result means.",
-    },
-  };
+  // One click = the whole slide; with an area selected, the same buttons mean that area.
+  const VIS_RULES =
+    "Make ONE self-contained interactive visual as a single ```html code block (inline SVG or canvas + vanilla JS, " +
+    "sliders or buttons where they help, no external files). After the block, say in 2-3 sentences what to look at and what to try.";
+  function quick(action) {
+    const area = !!state.area;
+    if (action === "explain") {
+      return area
+        ? { display: "Explain this area", prompt:
+            "Explain the selected area of this slide (the attached crop). Start with the one-sentence takeaway. Then go through " +
+            "it piece by piece: define every symbol and say in words what each equation or figure means. Relate it to the rest " +
+            "of the slide only where that helps." }
+        : { display: "Explain this slide", prompt:
+            "Explain this slide to me. Start with the one-sentence takeaway. Then go through it piece by piece: define every " +
+            "symbol, say in words what each equation or figure means, and connect it to the slides just before and after when that helps." };
+    }
+    return area
+      ? { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES }
+      : { display: "Visualize this slide", prompt: "Visualize the key idea of this slide. " + VIS_RULES };
+  }
 
   const NAMES = { claude: "Claude", codex: "ChatGPT" };
 
-  let state = { hasDeck: false, deckTitle: "", page: 0, pageCount: 0, messages: [], others: [], provider: "claude" };
+  // messages = the whole conversation about the deck; each carries the slide it was asked on.
+  let state = { hasDeck: false, deckTitle: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
+                conversation: null, history: [], area: null };
+  let viewAll = false;   // "This slide" (default) or "All"
+  function visible(m) { return viewAll || m.page == null || m.page === state.page; }
   // {claude: {models:[{id,label}], model, efforts:[...], effort}, codex: {...}} — from Swift
   let config = {};
   // {claude: {windows:[{label, percent, resetsAt}], updated}, codex: {...}} — from Swift
@@ -69,15 +71,24 @@
     const who = asking();
     return state.messages.some((m) => m.role === "assistant" && m.status === "streaming" && who.includes(m.provider));
   }
+  /// "Claude is answering on slide 7" when that answer isn't on screen.
+  function busyNote() {
+    const away = state.messages.filter((m) => m.role === "assistant" && m.status === "streaming" && !visible(m));
+    return away.map((m) => NAMES[m.provider] + " is answering on slide " + m.page).join(" · ");
+  }
 
   function renderHeader() {
     $("#where-deck").textContent = state.hasDeck ? state.deckTitle : "No slides open";
     $("#where-slide").textContent = state.hasDeck ? "slide " + state.page + " / " + state.pageCount : "";
-    const others = (state.others || []).filter((p) => p !== state.page);
+    for (const b of document.querySelectorAll("#viewseg button")) b.classList.toggle("on", (b.dataset.v === "all") === viewAll);
+    $("#head-actions").hidden = !state.hasDeck;
+    const others = viewAll ? [] : (state.pages || []).filter((p) => p !== state.page);
     const box = $("#others");
     const list = $("#others-list");
-    list.textContent = "";
-    if (others.length) {
+    const sig = others.join(",");
+    if (list.dataset.sig !== sig) {
+      list.dataset.sig = sig;
+      list.textContent = "";
       for (const p of others) {
         const b = document.createElement("button");
         b.className = "pg";
@@ -86,14 +97,14 @@
         b.onclick = () => post({ type: "gotoSlide", page: p });
         list.appendChild(b);
       }
-      box.hidden = false;
-    } else box.hidden = true;
-    $("#btn-clear").hidden = !state.messages.length;
-    $("#attach").textContent = state.hasDeck
-      ? state.messages.length
-        ? "Chat about slide " + state.page
-        : "Slide " + state.page + " is attached"
-      : "";
+    }
+    box.hidden = !others.length;
+    const note = busyNote();
+    const att = $("#attach");
+    att.className = note ? "busynote" : "";
+    att.textContent = !state.hasDeck ? "" : note ? note
+      : state.area ? "The selected area of slide " + state.area.page + " goes with your next question"
+      : "Slide " + state.page + " goes with your question";
     for (const b of document.querySelectorAll("#providers button")) {
       const on = b.dataset.p === state.provider;
       b.classList.toggle("on", on);
@@ -104,7 +115,16 @@
     sendBtn.textContent = isBusy ? "Stop" : "Send";
     sendBtn.classList.toggle("stop", isBusy);
     sendBtn.disabled = !state.hasDeck;
-    for (const c of document.querySelectorAll(".chip")) c.disabled = !state.hasDeck || isBusy;
+    for (const c of document.querySelectorAll(".chip")) c.disabled = !state.hasDeck || (isBusy && c.id !== "btn-area");
+    const ex = document.querySelector('.chip[data-action="explain"]'), vi = document.querySelector('.chip[data-action="visualize"]');
+    ex.textContent = quick("explain").display;
+    vi.textContent = quick("visualize").display;
+    const ab = $("#areabox");
+    if (state.area) {
+      $("#area-img").src = state.area.thumb;
+      $("#area-label").textContent = "Area of slide " + state.area.page;
+      ab.hidden = false;
+    } else ab.hidden = true;
   }
 
   // ---------- model menu and usage card (popovers) ----------
@@ -132,7 +152,7 @@
   }
   document.addEventListener("mousedown", (e) => {
     if (!pop) return;
-    if (popEl.contains(e.target) || e.target.closest(".pickbtn") || e.target.closest("#usage")) return;
+    if (popEl.contains(e.target) || e.target.closest(".pickbtn") || e.target.closest("#usage") || e.target.closest("#btn-history")) return;
     closePop();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pop) { closePop(); e.stopPropagation(); } }, true);
@@ -238,6 +258,41 @@
     if (anchor()) placePop(anchor(), false);
   }
 
+  function renderHistoryPop() {
+    popEl.textContent = "";
+    popEl.appendChild(el("div", "pop-title", "Chats about this deck"));
+    const fmt = (t) => {
+      const d = new Date(t * 1000), now = new Date();
+      return d.toDateString() === now.toDateString()
+        ? "Today " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    };
+    // The open chat's row is counted from the messages on screen (the list itself is sent with the slide).
+    const asked = (state.messages || []).filter((m) => m.role === "user");
+    for (const h of state.history || []) {
+      const count = h.current ? asked.length : h.count;
+      const first = h.current && asked.length ? asked[0].display || asked[0].text.slice(0, 60) : h.first;
+      const row = el("div", "hist");
+      row.appendChild(el("span", "check", h.current ? "✓" : ""));
+      const main = el("span", "hmain");
+      main.appendChild(el("span", "hwhen", (h.legacy ? "Per-slide chats (before v0.1.5)" : fmt(h.created)) + " · " + count + (count === 1 ? " question" : " questions")));
+      if (first) main.appendChild(el("span", "hfirst", first));
+      row.appendChild(main);
+      const del = el("button", "hdel", "Delete");
+      del.onclick = (e) => { e.stopPropagation(); post({ type: "deleteChat", id: h.id }); };
+      row.appendChild(del);
+      row.onclick = () => { if (!h.current) post({ type: "openChat", id: h.id }); closePop(); };
+      popEl.appendChild(row);
+    }
+    const foot = el("div", "pop-foot");
+    foot.appendChild(el("span", "", "Each chat covers the whole deck."));
+    const nb = el("button", "link", "New chat");
+    nb.onclick = () => { post({ type: "newChat" }); closePop(); };
+    foot.appendChild(nb);
+    popEl.appendChild(foot);
+    placePop($("#btn-history"), true);
+  }
+
   function resetText(w) {
     if (w.resetsAt) {
       const d = new Date(w.resetsAt * 1000), now = new Date();
@@ -325,6 +380,7 @@
       b.title = NAMES[p] + ": choose model and effort";
       b.onclick = () => {
         if (pop && pop.kind === "model" && pop.provider === p) { closePop(); return; }
+        closePop();
         pop = { kind: "model", provider: p, edit: false };
         renderPickers();
         renderModelPop(p);
@@ -363,13 +419,27 @@
   function emptyState() {
     const d = document.createElement("div");
     d.className = "empty";
-    if (state.hasDeck) {
-      d.innerHTML =
-        "Ask anything about <b>slide " + state.page + "</b>.<br>The slide image and its text go with your first question automatically.";
-    } else {
+    if (!state.hasDeck) {
       d.innerHTML = "Open a lecture from the bar above the slides.";
+    } else if (!state.messages.length) {
+      d.innerHTML = "Ask anything about <b>slide " + state.page + "</b>.<br>" +
+        "This chat covers the whole deck: move between slides and keep asking; the assistants remember the conversation " +
+        "and see each slide you ask on. Use ✂︎ Select area to ask about part of a slide.";
+    } else {
+      d.innerHTML = "Nothing asked on <b>slide " + state.page + "</b> yet in this chat.<br>Ask away: the assistants remember what you asked on the other slides.";
     }
     return d;
+  }
+
+  function legacyBanner() {
+    const b = document.createElement("div");
+    b.className = "banner";
+    b.append("These are your per-slide chats from before v0.1.5. New questions continue here, and the assistants get them as context. ");
+    const n = document.createElement("button");
+    n.textContent = "Start a new chat";
+    n.onclick = () => post({ type: "newChat" });
+    b.appendChild(n);
+    return b;
   }
 
   function makeVisual(code, lang, id) {
@@ -456,9 +526,24 @@
     el.className = "msg " + m.role + (m.provider ? " " + m.provider : "") + (m.status === "streaming" ? " streaming" : "");
     el.textContent = "";
     if (m.role === "user") {
+      if (viewAll && m.page != null) {
+        const tag = document.createElement("button");
+        tag.className = "slidetag";
+        tag.textContent = "slide " + m.page;
+        tag.title = "Go to slide " + m.page;
+        tag.onclick = () => post({ type: "gotoSlide", page: m.page });
+        el.appendChild(tag);
+      }
       const b = document.createElement("div");
       b.className = "bubble";
-      b.textContent = m.display || m.text;
+      if (m.areaThumb) {
+        const img = document.createElement("img");
+        img.className = "area";
+        img.src = m.areaThumb;
+        img.alt = "selected area";
+        b.appendChild(img);
+      }
+      b.appendChild(document.createTextNode(m.display || m.text));
       el.appendChild(b);
       return;
     }
@@ -514,10 +599,12 @@
   function renderAll() {
     elById.clear();
     log.textContent = "";
-    if (!state.messages.length) {
+    if (state.conversation && state.conversation.legacy && state.messages.length) log.appendChild(legacyBanner());
+    const shown = state.messages.filter(visible);
+    if (!shown.length) {
       log.appendChild(emptyState());
     } else {
-      for (const m of state.messages) {
+      for (const m of shown) {
         const el = document.createElement("div");
         fillMessage(el, m);
         elById.set(m.id, el);
@@ -543,16 +630,28 @@
   // ---------- API for Swift ----------
   window.CL = {
     setThread(s) {
+      const sig = (x) => (x.conversation ? x.conversation.id : "") + "|" + (x.hasDeck ? x.deckTitle : "") + "|"
+        + (x.messages || []).map((m) => m.id + ":" + m.status + ":" + (m.text || "").length).join(",");
+      const same = viewAll && (s.messages || []).length > 0 && sig(state) === sig(s);
       state = Object.assign({}, state, s);
+      if (same) {   // "All" shows every slide's messages: only the header changes with the slide
+        renderHeader();   // (an update queued for the next frame still lands)
+        if (pop && pop.kind === "history") { if (state.hasDeck) renderHistoryPop(); else closePop(); }
+        return;
+      }
       pendingRender.clear();
       renderAll();
+      if (pop && pop.kind === "history") { if (state.hasDeck) renderHistoryPop(); else closePop(); }
     },
     upsertMessage(m) {
       const i = state.messages.findIndex((x) => x.id === m.id);
+      if (m.page != null && !(state.pages || []).includes(m.page)) state.pages = (state.pages || []).concat([m.page]).sort((a, b) => a - b);
       if (i === -1) {
-        const stick = nearBottom();
-        if (!state.messages.length) log.textContent = "";
         state.messages.push(m);
+        if (m.role === "user" && pop && pop.kind === "history") renderHistoryPop();
+        if (!visible(m)) { renderHeader(); return; }   // asked on another slide: kept, shown there
+        const stick = nearBottom();
+        if (!elById.size) { const keep = log.querySelector(".banner"); log.textContent = ""; if (keep) log.appendChild(keep); }
         const el = document.createElement("div");
         fillMessage(el, m);
         elById.set(m.id, el);
@@ -562,14 +661,15 @@
         return;
       }
       state.messages[i] = m;
+      if (!elById.has(m.id)) { renderHeader(); return; }
       pendingRender.set(m.id, m);
       if (!rafQueued) {
         rafQueued = true;
         requestAnimationFrame(flushPending);
       }
     },
-    setOthers(pages) {
-      state.others = pages || [];
+    setArea(a) {
+      state.area = a || null;
       renderHeader();
     },
     setProvider(p) {
@@ -598,10 +698,10 @@
   function send(text, action) {
     if (!state.hasDeck) return;
     if (busy()) return;
-    const q = action ? QUICK[action] : null;
+    const q = action ? quick(action) : null;
     const prompt = q ? q.prompt : text.trim();
     if (!prompt) return;
-    post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider });
+    post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider, useArea: !!state.area });
     if (!q) {
       input.value = "";
       autoGrow();
@@ -609,7 +709,7 @@
   }
 
   sendBtn.onclick = () => {
-    if (busy()) post({ type: "stop" });
+    if (busy()) post({ type: "stop", providers: asking() });
     else send(input.value);
   };
   // ← → turn slides unless a text box, menu or visual has the keys (decided here, synchronously).
@@ -636,17 +736,28 @@
     input.style.height = Math.min(input.scrollHeight, 180) + "px";
   }
   input.addEventListener("input", autoGrow);
-  for (const c of document.querySelectorAll(".chip")) c.onclick = () => send("", c.dataset.action);
+  for (const c of document.querySelectorAll(".chip[data-action]")) c.onclick = () => send("", c.dataset.action);
+  $("#btn-area").onclick = () => post({ type: "selectArea" });
+  $("#area-clear").onclick = () => post({ type: "clearArea" });
+  for (const b of document.querySelectorAll("#viewseg button"))
+    b.onclick = () => { viewAll = b.dataset.v === "all"; renderAll(); };
+  $("#btn-new").onclick = () => post({ type: "newChat" });
+  $("#btn-history").onclick = () => {
+    if (pop && pop.kind === "history") { closePop(); return; }
+    closePop();
+    pop = { kind: "history" };
+    renderHistoryPop();
+  };
   for (const b of document.querySelectorAll("#providers button"))
     b.onclick = () => {
       state.provider = b.dataset.p;
       renderHeader();
       post({ type: "setProvider", provider: b.dataset.p });
     };
-  $("#btn-clear").onclick = () => post({ type: "clearThread" });
   $("#usage").onclick = () => {
     const box = $("#usage");
     if (pop && pop.kind === "usage") { closePop(); return; }
+    closePop();
     pop = { kind: "usage" };
     box.classList.add("open");
     renderUsagePop(box);

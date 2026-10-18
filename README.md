@@ -1,33 +1,45 @@
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.4.
+A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.5.
 
-- **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs; the strip at the bottom holds slide thumbnails.
-- **Right, Chat tab:** ask about the slide on screen. The first question on a slide sends the slide image, its text and the text of the slides around it automatically. Pick **Claude**, **ChatGPT**, or **Both** (two answers to compare).
+- **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs (browser-style: + or ⌘T for a New Tab); the strip at the bottom holds slide thumbnails.
+- **Right, Chat tab:** one conversation per lecture deck, with Claude, ChatGPT, or Both. Move through the slides and keep asking: the assistants remember the conversation, and each message tells them which slide you're on.
 - **Right, Walkthrough tab:** the walkthrough or review page for this deck, scrolled to the section for the current slide. For decks with typed LaTeX notes it also offers those notes (PDF), opened at the page that shows the current slide.
 
-Each slide keeps its own conversation. Follow-ups continue the same conversation, and the slide's old Q&A is still there when you come back. An orange dot on a thumbnail means that slide has a chat.
+### How the chat works
 
-Claude and ChatGPT share the slide's conversation: when you ask one of them, it is also shown whatever it hasn't seen yet (the other one's answers, or questions you sent only to the other one), so "ChatGPT says 2 solutions, you say 4 — who's right?" works. Each assistant is only "busy" for itself: in Both mode you can follow up with Claude while ChatGPT is still writing.
+- **What the assistants get.** A new conversation starts with the text of every slide (cheap) and the image of the slide you're on. Afterwards each question is tagged "you're on slide N"; a slide's image is attached the first time it comes up, and so are slides you mention ("compare with slide 3", "slides 5–8"). Claude can also open any slide image itself.
+- **What you see.** *This slide* shows what you asked on the slide on screen; *All* shows the whole conversation with a slide tag on each question (click it to jump). "Also asked on slides" and orange dots on the thumbnails show where you asked before.
+- **Buttons.** *Explain this slide* and *Visualize this slide* are one click for the whole slide. **✂︎ Select area** (or ⌥-drag on the slide, or ⌘⇧A) lets you drag a box over part of a slide like a screenshot; the cut-out goes with your next question, and the buttons become *Explain this area* / *Visualize this area*.
+- **New chat / History.** *New chat* starts a fresh conversation about the deck (long ones get slower and use more of your limits); *History* switches between earlier ones or deletes them. Chats from before v0.1.5 (one per slide) were gathered into one conversation marked "per-slide chats"; the old per-slide file `<name>-<hash>.json` is left unchanged (older versions still read it), and the new conversations are saved in `<name>-<hash>.chat2.json`.
+- Claude and ChatGPT share the conversation: each is shown what the other said that it hasn't seen yet. Each assistant is only "busy" for itself.
 
 ## Using it
 
 | Action | How |
 |---|---|
 | Open a lecture | **Lectures** menu (top left) or the list on the start screen. Any other PDF: ⌘O |
+| Tabs | **+** after the tabs or ⌘T opens a New Tab with the lecture list; picking a lecture there opens it in that tab. Click a tab to switch; × or ⌘W closes the tab on screen. Each deck remembers its slide |
 | Next / previous slide | → / ← (anywhere, except while typing in the chat box or using a visual or slider), ⌘] / ⌘[ , or click a thumbnail |
-| Ask | type and press Enter (Shift+Enter for a new line), or use the buttons: *Explain this slide*, *Visualize it*, *Derive step by step*. Esc leaves the chat box (so ← → turn slides again) |
+| Ask | type and press Enter (Shift+Enter for a new line), or *Explain this slide* / *Visualize this slide*. Esc leaves the chat box (so ← → turn slides again) |
+| Ask about part of a slide | **✂︎ Select area** under the chat, ⌥-drag on the slide, or ⌘⇧A; drag a box; Esc cancels. The buttons become *Explain this area* / *Visualize this area* |
+| See the conversation | *This slide* / *All* at the top of the chat; *History* for earlier chats; *New chat* for a fresh one |
 | Model and effort | click the model button next to Claude / ChatGPT / Both (e.g. "● Opus 5.5 Medium ⌄"): pick a model and slide the effort (also in Settings ⌘,). **Choose models…** picks which models the menu shows; new models appear by themselves (marked *New* for a week). Each answer is labelled with the model and effort it used |
 | Plan usage | bottom right of the chat shows the short version; click it for the usage card: Claude's current session, week (all models) and week (Fable) with bars and reset times, and ChatGPT's limits, with your plan names. The card refreshes when opened (if older than 2 minutes) and with ↻; it also updates after every answer |
 | Link / unlink a walkthrough or notes PDF | Walkthrough tab › 🔗 menu: **Link a walkthrough page or notes PDF…**, **Unlink "…"** for each page, **Link again** for pages you unlinked. A page you link syncs to the slides right away (HTML pages through their slide references, notes PDFs through their slide stamps). Unlinked pages stay out even if they are found again; unlinking a notes PDF also stops Claude reading its .tex |
+| Light / Dark / Automatic | the ☀︎ / ☾ button at the right of the top bar, View › Appearance, or Settings |
 | Jump to the chat box | ⌘L |
 | Chat / Walkthrough tab | ⌘1 / ⌘2 |
-| Stop an answer | the red **Stop** button |
-| Visuals | "Visualize it" answers come with a live interactive drawing; **Open in window** shows it bigger; **Code** shows the source |
+| Pop out Chat or Walkthrough (e.g. onto an iPad as a second screen) | the ⧉ button at the right of the panel header, or Slides › Pop Out Chat (⌥⌘1) / Pop Out Walkthrough (⌥⌘2). The first time, a pop-out goes to another screen if one is connected (both share it, Chat on the left); after that each window remembers where it was. With both out, the slides fill the window. **Put back** in the window's title bar, its close button or ⌘W docks it again; pop-outs left open come back at the next launch |
+| Slides / right panel width | opens at 3 : 2 every launch; drag the divider, double-click it to go back to 3 : 2 |
+| Stop an answer | the red **Stop** button (stops answers still running in this chat, on any slide) |
+| Visuals | "Visualize" answers come with a live interactive drawing; **Open in window** shows it bigger; **Code** shows the source |
 
 ## First launch
 
-If a linked folder is on your Desktop, macOS asks once whether Co-learner may access files there. Click **Allow**. Because the app is not signed with a developer certificate, macOS asks again after each update.
+If a linked folder is on your Desktop, macOS asks once whether Co-learner may access files there. Click **Allow**.
+
+**Signing.** `scripts/build_app.sh` signs the app with a private certificate, "Co-learner Local Signing", kept in the login keychain of this Mac. macOS remembers the Desktop permission by the bundle ID (`com.yifeidai.colearner`) plus that certificate, so it survives rebuilds and renaming the app. Without the certificate the script signs ad-hoc, and macOS asks again after every rebuild. To recreate the certificate on another Mac: make a self-signed certificate with the Code Signing extended key usage named exactly "Co-learner Local Signing" (Keychain Access › Certificate Assistant › Create a Certificate, type Code Signing, or openssl + `security import … -T /usr/bin/codesign`); no trust change is needed.
 
 ## How it talks to Claude and ChatGPT
 
@@ -36,13 +48,13 @@ No API keys. The app runs the command-line tools that are already logged in on t
 - **Claude:** Claude Code in headless mode (`claude -p`, streamed JSON). The app picks the newest copy it can find, including the one the Claude desktop app keeps up to date. Opus 5.5 needs Claude Code 2.1.280 or newer. It runs with its own system prompt, no MCP servers, no settings or memory files, and read-only tools (Read, Grep, Glob). It is told which files belong to the deck (walkthrough page, typed lecture notes `.tex`, lecture transcripts) and reads them when a question needs more than the slide; deny rules keep it out of the handwritten scans (`*inclass*`, `*_scribing_*.pdf`).
 - **ChatGPT:** the Codex CLI (`codex exec --json`), using the ChatGPT login, read-only sandbox, shell tools and web search off. Default model `gpt-6-astra`, reasoning effort medium.
 
-Each slide's conversation keeps one Claude session and one Codex thread, resumed for follow-ups.
+Each conversation (one per deck) keeps one Claude session and one Codex thread, resumed for follow-ups.
 
 ## Files
 
 | What | Where |
 |---|---|
-| Chats (one JSON file per deck) | `~/Library/Application Support/Co-learner/chats/` |
+| Chats (`<name>-<hash>.chat2.json` per deck; `<name>-<hash>.json` is the pre-0.1.5 per-slide file, left as it was) | `~/Library/Application Support/Co-learner/chats/` |
 | Links you add with the 🔗 button | `~/Library/Application Support/Co-learner/links.json` |
 | Your own library override (optional) | `~/Library/Application Support/Co-learner/library.json` |
 | Rendered slide images sent to the assistants | `~/Library/Caches/Co-learner/slides/` |
@@ -81,12 +93,14 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 | `App.swift` | app entry, menus, Settings |
 | `AppModel.swift` | open decks, current slide, 2-up splitting, thumbnails |
 | `MainView.swift` | window layout, lecture bar, right panel |
+| `Panels.swift` | the slides / right-panel split (3 : 2), hosting the shared panel views, Chat / Walkthrough pop-out windows |
+| `HoverStyles.swift` | hover highlights for the tab bar's small buttons and menus |
 | `SlidesView.swift` | PDFKit slide view and thumbnail strip |
 | `ChatController.swift` | chat web view bridge, sending, streaming, stop |
 | `Backends.swift` | Claude Code and Codex runners and their JSON parsers |
 | `ProcessRunner.swift` | child processes and line-by-line output |
-| `SlideContext.swift` | slide PNG and text sent with the first question |
-| `ChatStore.swift` | chat history on disk |
+| `SlideContext.swift` | slide and area images, the deck header a new conversation gets, slide numbers mentioned in a question |
+| `ChatStore.swift` | conversations per deck on disk (and the v1 → v2 migration) |
 | `WalkthroughPane.swift` | walkthrough tab (html pages) |
 | `StudyPDF.swift`, `ScribeMap.swift` | notes PDFs in the walkthrough tab, slide → notes page |
 | `StudyDiscovery.swift` | finds study pages and notes made later and matches them to decks |
@@ -98,6 +112,7 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 
 ## Changelog
 
+- **0.1.5** (2026-10-17): one conversation per deck (deck text up front, slide images on demand, slides you mention attached, This slide / All view, New chat, History); select an area of a slide and ask about it; buttons cut to Explain and Visualize. Per-slide chats migrate into one conversation. Light / Dark / Automatic appearance switch. Browser-style tabs (+ / ⌘T New Tab with the lecture list, ⌘W closes a tab, tabs sized to their titles) with hover highlights on +, ×, the slide arrows and the menus; the Lectures menu lists deck names only. Slides and the right panel open at 3 : 2 (custom divider; double-click resets). Chat and Walkthrough can pop out into their own windows (for an iPad second screen), follow the slides there, dock back on close, and reopen at launch. Stop only stops the assistants being asked, and the answer shows "stopping…" until that assistant has really stopped (no new question can race it); a stopped or failed answer no longer counts as "seen" by that assistant; more ways to name slides ("slide #4", "pg 12", "3 through 6"). Builds are signed with a local certificate, so macOS keeps the Desktop permission across updates; the build script stops on a failed build.
 - **0.1.4** (2026-10-17): link and unlink study pages per deck from the Walkthrough tab (🔗 menu), with Link again; hand-linked pages of two-up decks use the split-slide numbering. Tested with the real library loader on a scratch settings folder (11/11).
 - **0.1.3** (2026-10-17): walkthrough pages and notes PDFs made later are found automatically (StudyDiscovery.swift).
 - **0.1.2** (2026-10-17): model lists come from the tools and refresh at every launch (and with *Refresh list*): Claude Code's aliases resolved with `/model <alias>`, effort levels from `claude --help`, Codex's `model/list`. Choose which models the menu shows; *New* badge for new models (and when an alias like "opus" starts meaning a newer model); effort is a slider; no model descriptions. A refresh that comes back partial or offline (Codex's built-in presets) is not applied; the plan's list comes from Codex's own cache, which model/list refreshes. Reviewed (2 reviewers + verifiers): model buttons no longer get rebuilt while an answer streams (clicks were lost), the effort slider keeps keyboard focus and drags across redraws.

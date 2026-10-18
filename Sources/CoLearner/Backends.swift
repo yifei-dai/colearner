@@ -3,7 +3,8 @@ import Foundation
 struct BackendRequest {
     var prompt: String
     var instructions: String
-    var imageURL: URL?
+    /// Slide images and selected areas attached to this message (in order).
+    var imageURLs: [URL] = []
     var resume: String?
     var model: String?
     var effort: String?
@@ -20,11 +21,18 @@ enum BackendEvent {
     case usage([UsageWindow])   // plan usage reported along the way
     case finished
     case failed(String)
+    /// The partial answer on screen did not make it into the assistant's session (killed, cut off, failed).
+    case notKept
+    /// The turn completed and is in the session (a Stop pressed after this doesn't make it "stopped").
+    case saved
 }
 
 protocol RunHandle: AnyObject {
     func cancel()
     func terminateNow()
+    var isRunning: Bool { get }
+    /// The exit status once the process has ended (nil while it runs).
+    var exitStatus: Int32? { get }
 }
 extension ProcessRunner: RunHandle {}
 
@@ -145,7 +153,7 @@ final class CodexBackend: Backend {
                     "--disable", "shell_tool", "--disable", "unified_exec",
                     "-c", "developer_instructions=\(tomlString)"]
         if let r = req.resume { args += ["resume", r] }
-        if let img = req.imageURL { args += ["-i", img.path] }
+        for img in req.imageURLs { args += ["-i", img.path] }
         args += ["--", req.prompt]
 
         var messages: [String] = []
@@ -177,6 +185,7 @@ final class CodexBackend: Backend {
                 case "turn.completed":
                     completed = true
                     failure = nil   // an earlier "error" line (e.g. a stream retry) was not fatal
+                    onEvent(.saved)
                 case "turn.failed":
                     let e = (o["error"] as? [String: Any])?["message"] as? String ?? "Codex turn failed"
                     failure = humanError(e)
@@ -190,6 +199,7 @@ final class CodexBackend: Backend {
                 // Codex writes its plan usage into the session log, not to stdout.
                 let w = UsageWindow.latestCodex(thread: thread)
                 if !w.isEmpty { onEvent(.usage(w)) }
+                if completed && failure == nil { onEvent(.finished); return }
                 if cancelled { onEvent(.finished); return }
                 if let failure { onEvent(.failed(Self.withHint(failure))); return }
                 if completed || !messages.isEmpty { onEvent(.finished); return }
@@ -317,7 +327,8 @@ final class ClaudeBackend: Backend {
         if let r = req.resume { args += ["--resume", r] }
 
         var content: [[String: Any]] = []
-        if let img = req.imageURL, let data = try? Data(contentsOf: img) {
+        for img in req.imageURLs {
+            guard let data = try? Data(contentsOf: img) else { continue }
             content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": data.base64EncodedString()]])
         }
         content.append(["type": "text", "text": req.prompt])
@@ -333,6 +344,7 @@ final class ClaudeBackend: Backend {
         var text = ""
         var segmentStart = 0          // where the current API message's text began (character offset)
         var gotResult = false
+        var succeeded = false   // a successful result: the whole turn is in the session
         var failure: String?
         weak var runnerRef: ProcessRunner?
         let runner = ProcessRunner(
@@ -397,20 +409,36 @@ final class ClaudeBackend: Backend {
                         var msg = (o["result"] as? String) ?? ((o["errors"] as? [String])?.joined(separator: "\n") ?? subtype)
                         if let r = msg.range(of: "API Error: ") { msg = humanError(String(msg[r.upperBound...]).replacingOccurrences(of: #"^\d{3} "#, with: "", options: .regularExpression)) }
                         failure = msg
-                    } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                              let final = o["result"] as? String, !final.isEmpty {
-                        // Nothing streamed (shouldn't happen with partial messages on): use the final text.
-                        text = final
-                        onEvent(.replace(final))
+                    } else {
+                        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                           let final = o["result"] as? String, !final.isEmpty {
+                            // Nothing streamed (shouldn't happen with partial messages on): use the final text.
+                            text = final
+                            onEvent(.replace(final))
+                        }
+                        succeeded = true
+                        onEvent(.saved)
                     }
                 default:
                     break
                 }
             },
             onExit: { status, stderr, cancelled in
-                if cancelled { onEvent(.finished); return }
-                if let failure { onEvent(.failed(Self.withHint(failure))); return }
+                // Stop sends SIGINT: Claude Code then saves the partial answer in the session and exits 0.
+                // Killed (SIGTERM/SIGKILL), cut off or failed, the text on screen never reached the session.
+                if succeeded && failure == nil { onEvent(.finished); return }   // complete, even if Stop came late
+                if cancelled {
+                    if status != 0 && !text.isEmpty { onEvent(.notKept) }
+                    onEvent(.finished)
+                    return
+                }
+                if let failure {
+                    if !text.isEmpty { onEvent(.notKept) }
+                    onEvent(.failed(Self.withHint(failure)))
+                    return
+                }
                 if gotResult { onEvent(.finished); return }
+                if !text.isEmpty { onEvent(.notKept) }
                 let tail = stderr.split(separator: "\n").suffix(6).joined(separator: "\n")
                 onEvent(.failed(text.isEmpty ? "Claude exited (status \(status)) without an answer.\n\(tail)" : "The answer was cut off (status \(status)).\n\(tail)"))
             })
