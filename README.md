@@ -1,6 +1,6 @@
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.5.
+A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.6.
 
 - **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs (browser-style: + or ⌘T for a New Tab); the strip at the bottom holds slide thumbnails.
 - **Right, Chat tab:** one conversation per lecture deck, with Claude, ChatGPT, or Both. Move through the slides and keep asking: the assistants remember the conversation, and each message tells them which slide you're on.
@@ -131,6 +131,7 @@ Verified on 2026-10-18: all 23 tests across four suites passed, and the optimize
 
 ## Changelog
 
+- **0.1.6** (2026-10-18): six reliability fixes for incomplete ChatGPT answers, crash recovery, refreshed assistant context after source changes, rebuilt notes PDFs, interactive walkthrough keyboard controls, and delayed scrolling across deck switches. Adds 23 offline regression tests across four suites; optimized release build verified. See the reliability review above for findings and coverage.
 - **0.1.5** (2026-10-17): one conversation per deck (deck text up front, slide images on demand, slides you mention attached, This slide / All view, New chat, History); select an area of a slide and ask about it; buttons cut to Explain and Visualize. Per-slide chats migrate into one conversation. Light / Dark / Automatic appearance switch. Browser-style tabs (+ / ⌘T New Tab with the lecture list, ⌘W closes a tab, tabs sized to their titles) with hover highlights on +, ×, the slide arrows and the menus; the Lectures menu lists deck names only. Slides and the right panel open at 3 : 2 (custom divider; double-click resets). Chat and Walkthrough can pop out into their own windows (for an iPad second screen), follow the slides there, dock back on close, and reopen at launch. Stop only stops the assistants being asked, and the answer shows "stopping…" until that assistant has really stopped (no new question can race it); a stopped or failed answer no longer counts as "seen" by that assistant; more ways to name slides ("slide #4", "pg 12", "3 through 6"). Builds are signed with a local certificate, so macOS keeps the Desktop permission across updates; the build script stops on a failed build.
 - **0.1.4** (2026-10-17): link and unlink study pages per deck from the Walkthrough tab (🔗 menu), with Link again; hand-linked pages of two-up decks use the split-slide numbering. Tested with the real library loader on a scratch settings folder (11/11).
 - **0.1.3** (2026-10-17): walkthrough pages and notes PDFs made later are found automatically (StudyDiscovery.swift).

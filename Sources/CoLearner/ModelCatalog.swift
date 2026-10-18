@@ -183,7 +183,7 @@ final class ModelCatalog {
     /// Codex app-server `model/list`: the models the logged-in ChatGPT plan offers, with their effort levels.
     nonisolated static func fetchCodex(_ bin: URL) -> [Model] {
         let lines = [
-            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"colearner","title":"Co-learner","version":"0.1.2"}}}"#,
+            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"colearner","title":"Co-learner","version":"0.1.6"}}}"#,
             #"{"method":"initialized"}"#,
             #"{"id":2,"method":"model/list","params":{}}"#,
         ].joined(separator: "\n") + "\n"
