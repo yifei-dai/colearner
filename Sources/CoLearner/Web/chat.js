@@ -320,8 +320,10 @@
     // The model buttons are redrawn often; always anchor to the one on screen now.
     const anchor = () => document.querySelector(".pickbtn." + p);
     if (dragging) { redrawAfterDrag = p; return; }
-    // Keep keyboard focus on the slider across a redraw (arrow keys step the effort).
-    const hadFocus = !!document.activeElement && document.activeElement.type === "range" && popEl.contains(document.activeElement);
+    // Preserve keyboard focus when native settings redraw the menu.
+    const focused = popEl.contains(document.activeElement) ? document.activeElement : null;
+    const hadSliderFocus = focused && focused.type === "range";
+    const hadFastFocus = focused && focused.id === "fast-mode";
     popEl.textContent = "";
     if (pop && pop.edit) {
       // Choose which models appear in the menu. The list itself comes from the tool and refreshes at launch.
@@ -392,9 +394,26 @@
       range.addEventListener("pointerdown", () => { dragging = true; });
       wrap.append(range, ticks);
       popEl.appendChild(wrap);
-      if (hadFocus) range.focus();
+      if (hadSliderFocus) range.focus();
     }
     if (c.hint) popEl.appendChild(el("div", "pop-hint", c.hint));
+    if (p === "codex") {
+      const row = el("label", "chk fast-mode");
+      const box = el("input");
+      box.type = "checkbox";
+      box.id = "fast-mode";
+      box.checked = !!c.fastMode;
+      box.onchange = () => post({ type: "setFastMode", provider: p, enabled: box.checked });
+      row.append(box, el("span", "", "Fast mode"));
+      popEl.appendChild(row);
+      if (c.fastModeHint) {
+        const hint = el("div", "pop-hint", c.fastModeHint);
+        hint.id = "fast-mode-hint";
+        box.setAttribute("aria-describedby", hint.id);
+        popEl.appendChild(hint);
+      }
+      if (hadFastFocus) box.focus();
+    }
     if (anchor()) placePop(anchor(), false);
   }
 
@@ -499,7 +518,7 @@
       const c = config[p];
       if (!c) return null;
       const m = c.models.find((x) => x.id === c.model), e = c.efforts.find((x) => x.id === c.effort);
-      return [p, m ? m.label : c.model, e ? e.label : c.effort];
+      return [p, m ? m.label : c.model, e ? e.label : c.effort, p === "codex" && !!c.fastMode];
     }));
     if (sig === pickSig) {
       // Same buttons: only update which one is open (a rebuilt button would swallow a click in progress).
@@ -516,8 +535,9 @@
       b.appendChild(el("span", "dot"));
       b.appendChild(el("span", "pk-model", m ? m.label : c.model));
       b.appendChild(el("span", "pk-effort", e ? e.label : c.effort));
+      if (p === "codex" && c.fastMode) b.appendChild(el("span", "pk-fast", "Fast"));
       b.appendChild(el("span", "chev", "⌄"));
-      b.title = NAMES[p] + ": choose model and effort";
+      b.title = NAMES[p] + (p === "codex" ? ": choose model, effort and fast mode" : ": choose model and effort");
       b.onclick = () => {
         if (pop && pop.kind === "model" && pop.provider === p) { closePop(); return; }
         closePop();

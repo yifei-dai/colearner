@@ -58,7 +58,7 @@ enum UsageFetcher {
 
     nonisolated static func codex(bin: URL, env: [String: String]) -> Result {
         let lines = [
-            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"colearner","title":"Co-learner","version":"0.1.7"}}}"#,
+            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"colearner","title":"Co-learner","version":"0.1.8"}}}"#,
             #"{"method":"initialized"}"#,
             #"{"id":2,"method":"account/rateLimits/read"}"#,
         ].joined(separator: "\n") + "\n"

@@ -55,22 +55,50 @@ struct BackendTests {
         #expect(result.error == nil)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func fastModeSetsTierForNewAndResumedTurns(fastMode: Bool, resumed: Bool) async throws {
+        let request = BackendRequest(prompt: "fixture question", instructions: "fixture instructions",
+                                     resume: resumed ? "existing-thread" : nil,
+                                     model: "fixture-model", effort: "high", fastMode: fastMode)
+        let result = try await run(lines: [partial, completed], request: request)
+        #expect(result.error == nil)
+        let args = result.arguments
+        func values(after flag: String) -> [String] {
+            args.indices.dropLast().filter { args[$0] == flag }.map { args[$0 + 1] }
+        }
+        #expect(values(after: "-m") == ["fixture-model"])
+        #expect(values(after: "-c").contains("model_reasoning_effort=high"))
+        #expect(values(after: "--enable").contains("fast_mode"))
+        // Explicit default clears a previous Fast turn when resuming the same chat.
+        #expect(values(after: "-c").filter { $0.hasPrefix("service_tier=") } ==
+                ["service_tier=\(fastMode ? "fast" : "default")"])
+        #expect(values(after: "resume") == (resumed ? ["existing-thread"] : []))
+        #expect(args.contains("--ignore-user-config"))
+        #expect(values(after: "-s") == ["read-only"])
+        #expect(result.model == "fixture-model · high" + (fastMode ? " · Fast" : ""))
+    }
+
     private struct Result {
         var events: [String] = []
         var error: String?
         var exitStatus: Int32?
+        var arguments: [String] = []
+        var model: String?
     }
 
     private enum FixtureError: Error { case timedOut }
 
     /// A real ProcessRunner consumes a tiny local CLI fixture. No installed AI CLI or session log is used.
-    private func run(lines: [String], exitCode: Int = 0, cancelWhen: String? = nil) async throws -> Result {
+    private func run(lines: [String], exitCode: Int = 0, cancelWhen: String? = nil,
+                     request: BackendRequest = BackendRequest(prompt: "fixture question", instructions: "fixture instructions")) async throws -> Result {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("colearner-backend-test-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let executable = dir.appendingPathComponent("fake-codex")
+        let argumentsFile = dir.appendingPathComponent("arguments.txt")
         func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         var script = "#!/bin/sh\n"
+        script += "printf '%s\\n' \"$@\" > " + quote(argumentsFile.path) + "\n"
         script += lines.map { "printf '%s\\n' " + quote($0) }.joined(separator: "\n") + "\n"
         script += "printf '%s\\n' 'fixture stderr' >&2\n"
         // exec keeps the same PID and no grandchild keeps its output pipe open when cancelled.
@@ -83,10 +111,11 @@ struct BackendTests {
             var result = Result()
             var settled = false
             var handle: RunHandle?
-            handle = backend.start(BackendRequest(prompt: "fixture question", instructions: "fixture instructions")) { event in
+            handle = backend.start(request) { event in
                 guard !settled else { return }
                 let name: String
                 switch event {
+                case .model(let model): result.model = model; return
                 case .replace: name = "answer"
                 case .saved: name = "saved"
                 case .notKept: name = "notKept"
@@ -98,6 +127,8 @@ struct BackendTests {
                 if name == cancelWhen { handle?.cancel() }
                 if name == "finished" || name == "failed" {
                     result.exitStatus = handle?.exitStatus
+                    result.arguments = ((try? String(contentsOf: argumentsFile, encoding: .utf8)) ?? "")
+                        .split(separator: "\n").map(String.init)
                     settled = true
                     handle = nil
                     continuation.resume(returning: result)

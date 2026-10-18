@@ -111,6 +111,8 @@ struct SettingsView: View {
                 Picker("Reasoning effort", selection: $model.codexEffort) {
                     ForEach(ModelCatalog.model(.codex, model.codexModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
                 }
+                Toggle("Fast mode", isOn: $model.codexFastMode)
+                    .help(ModelCatalog.fastModeHint)
             }
             Section("Appearance") {
                 Picker("Appearance", selection: $model.appearance) {

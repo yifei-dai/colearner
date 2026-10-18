@@ -127,6 +127,9 @@ final class AppModel: ObservableObject {
     @Published var codexEffort: String = UserDefaults.standard.string(forKey: "codexEffort") ?? "medium" {
         didSet { UserDefaults.standard.set(codexEffort, forKey: "codexEffort"); chat.pushConfig() }
     }
+    @Published var codexFastMode: Bool = UserDefaults.standard.bool(forKey: "codexFastMode") {
+        didSet { UserDefaults.standard.set(codexFastMode, forKey: "codexFastMode"); chat.pushConfig() }
+    }
     @Published var selectedStudyPage: [String: String] = [:]   // deck path -> study page path
     @Published var followSlides = true
     /// "system" (follow macOS), "light" or "dark". The chat and study pages follow it too.

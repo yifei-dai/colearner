@@ -8,6 +8,8 @@ struct BackendRequest {
     var resume: String?
     var model: String?
     var effort: String?
+    /// ChatGPT priority processing, independent of the model's reasoning effort.
+    var fastMode: Bool = false
     /// Folders the assistant may read (Claude only).
     var readableDirs: [URL] = []
 }
@@ -156,9 +158,11 @@ final class CodexBackend: Backend {
         let tomlString = (try? String(decoding: enc.encode(req.instructions), as: UTF8.self)) ?? "\"\""
         let model = (req.model?.isEmpty == false) ? req.model! : Self.defaultModel
         let effort = req.effort ?? "medium"
+        // An explicit standard tier also clears Fast mode inherited from a resumed thread.
         var args = ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config",
                     "-m", model, "-s", "read-only", "-C", work.path,
                     "-c", "model_reasoning_effort=\(effort)",
+                    "--enable", "fast_mode", "-c", "service_tier=\(req.fastMode ? "fast" : "default")",
                     "-c", "web_search=disabled",
                     "--disable", "shell_tool", "--disable", "unified_exec",
                     "-c", "developer_instructions=\(tomlString)"]
@@ -170,7 +174,7 @@ final class CodexBackend: Backend {
         var completed = false
         var failure: String?
         var thread: String? = req.resume
-        onEvent(.model(ModelCatalog.label(.codex, model) + " · " + effort))
+        onEvent(.model(ModelCatalog.label(.codex, model) + " · " + effort + (req.fastMode ? " · Fast" : "")))
         let runner = ProcessRunner(
             executable: bin, arguments: args, cwd: work,
             environment: ToolLocator.environment(addingDirsOf: [bin]),

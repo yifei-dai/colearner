@@ -17,6 +17,7 @@ final class ModelCatalog {
     }
 
     static let effortHint = "Higher effort means more thorough responses, but takes longer and uses your limits faster."
+    static let fastModeHint = "Faster responses with the same model and effort; uses your plan limits faster."
 
     private(set) var lists: [Provider: [Model]] = [:]
     private var hidden: [Provider: Set<String>] = [:]
@@ -183,7 +184,7 @@ final class ModelCatalog {
     /// Codex app-server `model/list`: the models the logged-in ChatGPT plan offers, with their effort levels.
     nonisolated static func fetchCodex(_ bin: URL) -> [Model] {
         let lines = [
-            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"colearner","title":"Co-learner","version":"0.1.7"}}}"#,
+            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"colearner","title":"Co-learner","version":"0.1.8"}}}"#,
             #"{"method":"initialized"}"#,
             #"{"id":2,"method":"model/list","params":{}}"#,
         ].joined(separator: "\n") + "\n"

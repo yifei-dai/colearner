@@ -67,8 +67,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
                 "refreshing": cat.refreshing,
             ]
         }
-        js("setConfig", ["claude": entry(.claude, model.claudeModel, model.claudeEffort),
-                         "codex": entry(.codex, model.codexModel, model.codexEffort)])
+        var codex = entry(.codex, model.codexModel, model.codexEffort)
+        codex["fastMode"] = model.codexFastMode
+        codex["fastModeHint"] = ModelCatalog.fastModeHint
+        js("setConfig", ["claude": entry(.claude, model.claudeModel, model.claudeEffort), "codex": codex])
     }
 
     /// Fresh model lists from both tools (also run at every launch). New models appear in the menu by themselves.
@@ -365,6 +367,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
         case "setEffort":
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let e = body["effort"] as? String else { return }
             if p == .claude { model.claudeEffort = e } else { model.codexEffort = e }
+        case "setFastMode":
+            guard body["provider"] as? String == Provider.codex.rawValue,
+                  let enabled = body["enabled"] as? Bool else { return }
+            model.codexFastMode = enabled
         case "send":
             let text = body["text"] as? String ?? ""
             let display = body["display"] as? String
@@ -510,7 +516,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
             a.activity = "starting…"
             a.page = page
             let (mid, eff) = p == .claude ? (model.claudeModel, model.claudeEffort) : (model.codexModel, model.codexEffort)
-            a.model = ModelCatalog.label(p, mid) + " · " + eff
+            let fastMode = p == .codex && model.codexFastMode
+            a.model = ModelCatalog.label(p, mid) + " · " + eff + (fastMode ? " · Fast" : "")
             seenBefore[a.id] = before
             store.update(deck.path, convID) { $0.messages.append(a) }
             push(a, deck: deck.path, conv: convID, immediate: true)
@@ -518,7 +525,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             var dirs = readableDirs(for: deck)
             if p == .claude { dirs.append(SlideImages.folder(for: deck)) }
             let req = BackendRequest(prompt: prompt, instructions: Prompts.tutor, imageURLs: images, resume: resume,
-                                     model: mid, effort: eff, readableDirs: dirs)
+                                     model: mid, effort: eff, fastMode: fastMode, readableDirs: dirs)
             let id = a.id
             let backend: Backend = p == .claude ? claude : codex
             runWhere[id] = (deck.path, convID)
