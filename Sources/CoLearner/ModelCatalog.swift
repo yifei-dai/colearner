@@ -16,9 +16,6 @@ final class ModelCatalog {
         var efforts: [String] { effortInfo.map(\.id) }
     }
 
-    static let effortHint = "Higher effort means more thorough responses, but takes longer and uses your limits faster."
-    static let fastModeHint = "Faster responses with the same model and effort; uses your plan limits faster."
-
     private(set) var lists: [Provider: [Model]] = [:]
     private var hidden: [Provider: Set<String>] = [:]
     private var firstSeen: [Provider: [String: Double]] = [:]   // model id -> when this app first saw it (0 = from the start)

@@ -396,7 +396,6 @@
       popEl.appendChild(wrap);
       if (hadSliderFocus) range.focus();
     }
-    if (c.hint) popEl.appendChild(el("div", "pop-hint", c.hint));
     if (p === "codex") {
       const row = el("label", "chk fast-mode");
       const box = el("input");
@@ -406,12 +405,6 @@
       box.onchange = () => post({ type: "setFastMode", provider: p, enabled: box.checked });
       row.append(box, el("span", "", "Fast mode"));
       popEl.appendChild(row);
-      if (c.fastModeHint) {
-        const hint = el("div", "pop-hint", c.fastModeHint);
-        hint.id = "fast-mode-hint";
-        box.setAttribute("aria-describedby", hint.id);
-        popEl.appendChild(hint);
-      }
       if (hadFastFocus) box.focus();
     }
     if (anchor()) placePop(anchor(), false);

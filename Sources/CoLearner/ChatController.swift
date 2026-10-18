@@ -62,14 +62,12 @@ final class ChatController: NSObject, WKNavigationDelegate {
                 "model": id,
                 "efforts": (m?.effortInfo ?? []).map { ["id": $0.id, "label": $0.label] },
                 "effort": effort,
-                "hint": ModelCatalog.effortHint,
                 "updated": cat.updated[p] ?? 0,
                 "refreshing": cat.refreshing,
             ]
         }
         var codex = entry(.codex, model.codexModel, model.codexEffort)
         codex["fastMode"] = model.codexFastMode
-        codex["fastModeHint"] = ModelCatalog.fastModeHint
         js("setConfig", ["claude": entry(.claude, model.claudeModel, model.claudeEffort), "codex": codex])
     }
 

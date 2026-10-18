@@ -5,13 +5,11 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ModelPickerTests {
-    private let fastHint = "Faster responses with the same model and effort; uses your plan limits faster."
-
     private func config(fast: Bool, effort: String = "high") -> [String: Any] {
         let efforts = [["id": "medium", "label": "Medium"], ["id": "high", "label": "High"]]
         return [
             "codex": ["models": [["id": "gpt-5.4", "label": "GPT-5.4"]], "model": "gpt-5.4",
-                      "efforts": efforts, "effort": effort, "fastMode": fast, "fastModeHint": fastHint],
+                      "efforts": efforts, "effort": effort, "fastMode": fast],
             "claude": ["models": [["id": "opus", "label": "Opus"]], "model": "opus",
                        "efforts": efforts, "effort": effort]
         ]
@@ -30,7 +28,7 @@ struct ModelPickerTests {
         try await open("codex", in: web)
         #expect(try await web.evaluate("document.querySelector('#fast-mode').checked") as? Bool == false)
         #expect(try await web.evaluate("document.querySelector('#fast-mode').labels[0].textContent") as? String == "Fast mode")
-        #expect(try await web.evaluate("document.getElementById(document.querySelector('#fast-mode').getAttribute('aria-describedby')).textContent") as? String == fastHint)
+        #expect(try await web.evaluate("document.querySelector('.pop .pop-hint, .pop [aria-describedby]') === null") as? Bool == true)
 
         web.clearMessages()
         _ = try await web.evaluate("document.querySelector('#fast-mode').focus(); document.querySelector('#fast-mode').click(); null;")
@@ -102,6 +100,7 @@ struct ModelPickerTests {
         try await web.call("setProvider", "both")
         try await web.call("setConfig", config(fast: true))
         try await open("claude", in: web)
+        #expect(try await web.evaluate("document.querySelector('.pop .pop-hint, .pop [aria-describedby]') === null") as? Bool == true)
         #expect(try await web.evaluate("document.querySelector('#fast-mode') === null") as? Bool == true)
         #expect(try await web.evaluate("document.querySelector('.pickbtn.claude .pk-fast') === null") as? Bool == true)
         #expect(try await web.evaluate("document.querySelectorAll('.pickbtn.codex .pk-fast').length") as? Int == 1)
@@ -118,7 +117,7 @@ struct ModelPickerTests {
         try await web.call("setConfig", config(fast: true))
         try await open("codex", in: web)
         #expect(try await web.evaluate("document.documentElement.scrollWidth <= window.innerWidth") as? Bool == true)
-        #expect(try await web.evaluate("Array.from(document.querySelectorAll('.pickbtn, #btn-send, .pop, .fast-mode, #fast-mode-hint')).every(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight; })") as? Bool == true)
+        #expect(try await web.evaluate("Array.from(document.querySelectorAll('.pickbtn, #btn-send, .pop, .fast-mode')).every(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight; })") as? Bool == true)
         #expect(try await web.evaluate("document.querySelector('.pop').scrollWidth <= document.querySelector('.pop').clientWidth") as? Bool == true)
         if ProcessInfo.processInfo.environment["COLEARNER_TEST_SNAPSHOTS"] != nil {
             try await web.snapshot(to: URL(fileURLWithPath: "/tmp/colearner-v018-fast-mode.png"))
