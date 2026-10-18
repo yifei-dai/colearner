@@ -20,6 +20,11 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var seenBefore: [String: (provider: Provider, fresh: Bool, by: [String]?, slides: [Int]?)] = [:]
     private var dirty: [String: ChatMessage] = [:]
     private var flushScheduled = false
+    private var searchTask: Task<Void, Never>?
+    private var searchGeneration = 0
+    private var searchRequest: (query: String, id: Int)?
+    private var searchResults: [ChatSearchResult] = []
+    private var searchPending = false
     /// Last plan usage per assistant (kept across launches). Updated after every answer and on demand.
     private struct Usage { var plan: String?; var windows: [UsageWindow]; var updated: Double; var loading = false; var error: String? }
     private var usage: [Provider: Usage] = [:]
@@ -189,6 +194,67 @@ final class ChatController: NSObject, WKNavigationDelegate {
         webView.evaluateJavaScript("window.CL && CL.focusInput()", completionHandler: nil)
     }
 
+    func openSearch() {
+        if NSApp.isActive, let w = webView.window, !w.isKeyWindow { w.makeKeyAndOrderFront(nil) }
+        webView.window?.makeFirstResponder(webView)
+        guard ready else { searchPending = true; return }
+        js("openSearch", NSNull())
+    }
+
+    private func searchChats(query: String, requestID: Int) {
+        searchTask?.cancel()
+        searchGeneration += 1
+        let generation = searchGeneration
+        searchRequest = (query, requestID)
+        searchResults = []
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            let results = await self.store.search(query: query)
+            guard !Task.isCancelled, self.searchGeneration == generation else { return }
+            self.searchResults = results
+            self.pushSearchResults()
+        }
+    }
+
+    private func pushSearchResults(error: String? = nil) {
+        guard let request = searchRequest else { return }
+        var payload: [String: Any] = ["query": request.query, "requestID": request.id,
+            "results": searchResults.map { result -> [String: Any] in
+                let deck = model.deck(path: result.deckPath) ?? model.openDecks.first { $0.path == result.deckPath }
+                var row: [String: Any] = ["id": result.id, "deckPath": result.deckPath,
+                    "deckTitle": deck?.title ?? URL(fileURLWithPath: result.deckPath).deletingPathExtension().lastPathComponent,
+                    "courseName": deck?.courseName ?? "Saved deck", "messageID": result.messageID,
+                    "role": result.role.rawValue, "snippet": result.snippet,
+                    "created": result.createdAt.timeIntervalSince1970]
+                if let id = result.conversationID { row["conversationID"] = id }
+                if let page = result.page { row["page"] = page }
+                if let provider = result.provider { row["provider"] = provider.rawValue }
+                return row
+            }]
+        if let error { payload["error"] = error }
+        js("setSearchResults", payload)
+    }
+
+    private func openSearchResult(_ id: String) {
+        // The page may return only a native-issued result ID, never an arbitrary file path.
+        guard let result = searchResults.first(where: { $0.id == id }),
+              let destination = ChatNavigation.destination(for: result, store: store,
+                  decks: model.courses.flatMap(\.decks) + model.openDecks) else {
+            pushSearchResults(error: "This message is no longer available. Search again to refresh the results.")
+            return
+        }
+        guard model.open(destination.deck) else {
+            pushSearchResults(error: "The deck’s PDF could not be opened. Restore the file and try again.")
+            return
+        }
+        store.setCurrent(destination.deck.path, destination.conversationID)
+        if let page = destination.page, (1...max(model.pageCount, 1)).contains(page) { model.page = page }
+        model.refreshChatPages()
+        model.showPanel(.chat)
+        showCurrent()
+        js("revealMessage", ["messageID": destination.messageID])
+    }
+
     /// Re-render the chat panel: the deck's current conversation (chat.js shows this slide's part, or all).
     func showCurrent() {
         guard ready else { return }
@@ -207,7 +273,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         var areaJS: Any = NSNull()
         if let a = area { areaJS = ["page": a.page, "thumb": a.thumb] }
         js("setThread", [
-            "hasDeck": true, "deckTitle": d.title, "page": model.page, "pageCount": model.pageCount,
+            "hasDeck": true, "deckTitle": d.title, "deckPath": d.path, "page": model.page, "pageCount": model.pageCount,
             "messages": conv.messages.map(\.js), "pages": conv.pages, "provider": model.provider,
             "conversation": ["id": conv.id, "legacy": conv.legacy ?? false, "created": conv.created.timeIntervalSince1970],
             "history": store.conversations(d.path).map { c -> [String: Any] in
@@ -264,10 +330,20 @@ final class ChatController: NSObject, WKNavigationDelegate {
         switch body["type"] as? String {
         case "ready":
             ready = true
+            searchTask?.cancel()
+            searchGeneration += 1
+            searchRequest = nil
+            searchResults = []
             showCurrent()
             pushConfig()
             loadUsage()
             refreshModels()
+            if searchPending { searchPending = false; openSearch() }
+        case "searchChats":
+            guard let query = body["query"] as? String, let id = body["requestID"] as? Int else { return }
+            searchChats(query: query, requestID: id)
+        case "openSearchResult":
+            if let id = body["id"] as? String { openSearchResult(id) }
         case "turn":
             if let d = body["delta"] as? Int { model.go(d) }
         case "setModel":
@@ -299,7 +375,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
             let ps = (body["providers"] as? [String])?.compactMap(Provider.init(rawValue:))
             stopVisible(providers: ps.map(Set.init))
         case "gotoSlide":
-            if let p = body["page"] as? Int { model.page = p }
+            if let page = ChatNavigation.slide(from: body, deckPath: model.deck?.path,
+                conversationID: model.deck.map { store.current($0.path).id }, pageCount: model.pageCount) {
+                model.page = page
+            }
         case "selectArea":
             model.beginAreaSelection()
         case "clearArea":

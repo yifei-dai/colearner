@@ -36,6 +36,10 @@ struct CoLearnerApp: App {
                     // The chat view is only back in the window after this update; focus it then.
                     DispatchQueue.main.async { model.chat.focusInput() }
                 }.keyboardShortcut("l", modifiers: .command)
+                Button("Search Chats…") {
+                    model.showPanel(.chat)
+                    DispatchQueue.main.async { model.chat.openSearch() }
+                }.keyboardShortcut("f", modifiers: [.command, .shift])
                 Button("Select Area of Slide…") { model.beginAreaSelection() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                 Button("Show Walkthrough") { model.showPanel(.walkthrough) }

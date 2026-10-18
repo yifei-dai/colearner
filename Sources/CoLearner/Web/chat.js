@@ -31,7 +31,7 @@
   const NAMES = { claude: "Claude", codex: "ChatGPT" };
 
   // messages = the whole conversation about the deck; each carries the slide it was asked on.
-  let state = { hasDeck: false, deckTitle: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
+  let state = { hasDeck: false, deckTitle: "", deckPath: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
                 conversation: null, history: [], area: null };
   let viewAll = false;   // "This slide" (default) or "All"
   function visible(m) { return viewAll || m.page == null || m.page === state.page; }
@@ -42,6 +42,7 @@
   const elById = new Map();
   const pendingRender = new Map();
   let rafQueued = false;
+  let pendingReveal = null, highlightedMessageID = null, highlightTimer = null;
 
   // Page errors go to the app's log (Console.app / stderr) instead of disappearing.
   window.addEventListener("error", (e) => post({ type: "jsError", message: String(e.message) + " @" + e.lineno + ":" + e.colno }));
@@ -163,6 +164,145 @@
     if (text != null) n.textContent = text;
     return n;
   }
+
+  // ---------- search across saved chats ----------
+  const searchLayer = $("#search-layer"), searchInput = $("#search-input"), searchResults = $("#search-results");
+  const searchState = { open: false, query: "", requestID: 0, timer: null, returnFocus: null, opening: false };
+
+  function searchStatus(text, error) {
+    const status = $("#search-status");
+    status.textContent = text;
+    status.classList.toggle("error", !!error);
+  }
+  function setSearchBackground(inert) {
+    for (const id of ["#head", "#others", "#log", "#composer"]) $(id).inert = inert;
+  }
+  function closeSearch(restoreFocus = true) {
+    if (!searchState.open) return;
+    searchState.open = false;
+    searchState.opening = false;
+    searchInput.disabled = false;
+    searchState.requestID += 1;
+    clearTimeout(searchState.timer);
+    searchLayer.hidden = true;
+    setSearchBackground(false);
+    if (restoreFocus) {
+      const target = searchState.returnFocus;
+      (target && target.isConnected ? target : $("#btn-search")).focus();
+    }
+  }
+  function queueSearch() {
+    clearTimeout(searchState.timer);
+    const requestID = ++searchState.requestID;
+    const query = searchInput.value.trim();
+    searchState.query = query;
+    searchState.opening = false;
+    searchInput.disabled = false;
+    searchResults.textContent = "";
+    if (!query) { searchStatus("Type to search your saved chats."); return; }
+    searchStatus("Searching…");
+    searchState.timer = setTimeout(() => {
+      if (searchState.open && searchState.requestID === requestID)
+        post({ type: "searchChats", query, requestID });
+    }, 200);
+  }
+  function openSearch() {
+    closePop();
+    if (!searchState.open) {
+      const active = document.activeElement;
+      searchState.returnFocus = active && active !== document.body ? active : $("#btn-search");
+    }
+    searchState.open = true;
+    searchLayer.hidden = false;
+    setSearchBackground(true);
+    queueSearch();
+    searchInput.focus();
+    searchInput.select();
+  }
+  function searchSnippet(text, query) {
+    const span = el("span", "search-result-snippet");
+    text = String(text || "");
+    const at = text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+    if (at < 0) { span.textContent = text; return span; }
+    span.append(document.createTextNode(text.slice(0, at)), el("mark", "", text.slice(at, at + query.length)),
+                document.createTextNode(text.slice(at + query.length)));
+    return span;
+  }
+  function setSearchResults(payload) {
+    if (!payload || !searchState.open || payload.requestID !== searchState.requestID || payload.query !== searchState.query) return;
+    if (payload.error) {
+      searchState.opening = false;
+      searchInput.disabled = false;
+      searchResults.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+      searchStatus(String(payload.error), true);
+      return;
+    }
+    searchResults.textContent = "";
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    searchStatus(results.length >= 100 ? "Showing the 100 newest matches" : results.length
+      ? results.length + (results.length === 1 ? " result" : " results") : "No matches. Try another word or phrase.");
+    for (const result of results) {
+      if (!result || typeof result.id !== "string") continue;
+      const button = el("button", "search-result");
+      button.type = "button";
+      button.appendChild(el("span", "search-result-title", result.deckTitle || "Lecture deck"));
+      const metadata = [result.courseName, Number.isInteger(result.page) && result.page > 0 ? "slide " + result.page : null,
+                        result.role === "user" ? "You" : NAMES[result.provider] || "Assistant"];
+      if (Number.isFinite(result.created)) {
+        const date = new Date(result.created * 1000);
+        if (!Number.isNaN(date.getTime())) metadata.push(date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }));
+      }
+      button.appendChild(el("span", "search-result-meta", metadata.filter(Boolean).join(" · ")));
+      button.appendChild(searchSnippet(result.snippet, searchState.query));
+      button.onclick = () => {
+        if (searchState.opening) return;
+        searchState.opening = true;
+        searchInput.disabled = true;
+        searchResults.querySelectorAll("button").forEach((row) => { row.disabled = true; });
+        searchStatus("Opening chat…");
+        post({ type: "openSearchResult", id: result.id });
+      };
+      searchResults.appendChild(button);
+    }
+  }
+  function revealPendingMessage() {
+    if (!pendingReveal || !state.messages.some((m) => m.id === pendingReveal)) return;
+    const id = pendingReveal;
+    pendingReveal = null;
+    log.querySelectorAll(".search-highlight").forEach((node) => node.classList.remove("search-highlight"));
+    highlightedMessageID = id;
+    clearTimeout(highlightTimer);
+    closeSearch(false);
+    if (!viewAll) { viewAll = true; pendingRender.clear(); renderAll(); }
+    const target = elById.get(id);
+    if (!target) return;
+    target.classList.add("search-highlight");
+    requestAnimationFrame(() => {
+      if (elById.get(id) !== target || highlightedMessageID !== id) return;
+      target.tabIndex = -1;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "center", behavior: "auto" });
+    });
+    highlightTimer = setTimeout(() => {
+      if (highlightedMessageID !== id) return;
+      highlightedMessageID = null;
+      elById.get(id)?.classList.remove("search-highlight");
+    }, 5000);
+  }
+  $("#btn-search").onclick = openSearch;
+  $("#search-close").onclick = () => closeSearch();
+  searchInput.addEventListener("input", queueSearch);
+  searchLayer.addEventListener("mousedown", (e) => { if (e.target === searchLayer) closeSearch(); });
+  searchLayer.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const focusable = Array.from($("#search-dialog").querySelectorAll("input:not(:disabled), button:not(:disabled)"));
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (searchState.open && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeSearch(); }
+  }, true);
 
   // While the effort slider is being dragged, redraws wait until the mouse is released.
   let dragging = false, redrawAfterDrag = null;
@@ -523,7 +663,9 @@
   }
 
   function fillMessage(el, m) {
-    el.className = "msg " + m.role + (m.provider ? " " + m.provider : "") + (m.status === "streaming" ? " streaming" : "");
+    el.className = "msg " + m.role + (m.provider ? " " + m.provider : "") + (m.status === "streaming" ? " streaming" : "")
+      + (m.id === highlightedMessageID ? " search-highlight" : "");
+    el.dataset.messageId = m.id;
     el.textContent = "";
     if (m.role === "user") {
       if (viewAll && m.page != null) {
@@ -577,6 +719,9 @@
     if (m.text) {
       body.innerHTML = window.CLRender.renderMarkdown(m.text);
       enhance(body, m);
+      if (window.CLSlideLinks) window.CLSlideLinks.decorate(body, {
+        pageCount: state.pageCount, deckPath: state.deckPath, conversationID: state.conversation?.id,
+      });
     }
     el.appendChild(body);
     if (m.error) {
@@ -630,18 +775,21 @@
   // ---------- API for Swift ----------
   window.CL = {
     setThread(s) {
-      const sig = (x) => (x.conversation ? x.conversation.id : "") + "|" + (x.hasDeck ? x.deckTitle : "") + "|"
+      const sig = (x) => (x.conversation ? x.conversation.id : "") + "|" + (x.hasDeck ? x.deckPath : "") + "|" + x.pageCount + "|"
+        + (x.hasDeck ? x.deckTitle : "") + "|"
         + (x.messages || []).map((m) => m.id + ":" + m.status + ":" + (m.text || "").length).join(",");
       const same = viewAll && (s.messages || []).length > 0 && sig(state) === sig(s);
       state = Object.assign({}, state, s);
       if (same) {   // "All" shows every slide's messages: only the header changes with the slide
         renderHeader();   // (an update queued for the next frame still lands)
         if (pop && pop.kind === "history") { if (state.hasDeck) renderHistoryPop(); else closePop(); }
+        revealPendingMessage();
         return;
       }
       pendingRender.clear();
       renderAll();
       if (pop && pop.kind === "history") { if (state.hasDeck) renderHistoryPop(); else closePop(); }
+      revealPendingMessage();
     },
     upsertMessage(m) {
       const i = state.messages.findIndex((x) => x.id === m.id);
@@ -687,6 +835,13 @@
     focusInput() {
       input.focus();
     },
+    openSearch,
+    setSearchResults,
+    revealMessage(payload) {
+      if (!payload || typeof payload.messageID !== "string") return;
+      pendingReveal = payload.messageID;
+      revealPendingMessage();
+    },
     insertText(t) {
       input.value = (input.value ? input.value + "\n" : "") + t;
       autoGrow();
@@ -714,11 +869,34 @@
   };
   // ← → turn slides unless a text box, menu or visual has the keys (decided here, synchronously).
   document.addEventListener("keydown", (e) => {
+    if (searchState.open) return;
     if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) return;
     const a = document.activeElement;
     if (a && ["TEXTAREA", "INPUT", "SELECT", "IFRAME"].includes(a.tagName)) return;
     e.preventDefault();
     post({ type: "turn", delta: e.key === "ArrowLeft" ? -1 : 1 });
+  });
+  log.addEventListener("click", (e) => {
+    const button = e.target.closest("button.slide-ref");
+    if (!button || !log.contains(button)) return;
+    e.preventDefault();
+    const request = { type: "gotoSlide", page: Number(button.dataset.slide), deckPath: button.dataset.deckPath,
+                      conversationID: button.dataset.conversationId };
+    // Keep the cited answer on screen when its source slide differs from the slide the question was asked on.
+    if (!viewAll) {
+      const message = button.closest(".msg"), id = message?.dataset.messageId;
+      const top = message?.getBoundingClientRect().top;
+      viewAll = true;
+      pendingRender.clear();
+      renderAll();
+      const replacement = id && elById.get(id);
+      if (replacement && top != null) {
+        log.scrollTop += replacement.getBoundingClientRect().top - top;
+        const link = Array.from(replacement.querySelectorAll("button.slide-ref")).find((node) => Number(node.dataset.slide) === request.page);
+        link?.focus({ preventScroll: true });
+      }
+    }
+    post(request);
   });
 
   input.addEventListener("keydown", (e) => {

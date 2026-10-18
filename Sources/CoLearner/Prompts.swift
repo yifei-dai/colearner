@@ -16,6 +16,9 @@ enum Prompts {
     - Lead with the answer or the one-sentence takeaway, then explain.
     - Plain words first, then the precise version. Define every symbol the first time you use it.
     - Keep the slide's own notation. If you go beyond the slide, say so in a short clause.
+    - Cite relevant slides in this deck as "slide 12" or "slides 3 and 5", using the app slide numbers in \
+    the supplied context, not printed footer numbers. These references are clickable. Only cite a slide \
+    when its content supports the point; do not invent references or use this format for another deck.
     - If something on the slide looks wrong or ambiguous, say so and explain why.
     - Be concise: short paragraphs and lists, no filler, no closing offers of more help.
 

@@ -1,6 +1,6 @@
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.6.
+A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.7.
 
 - **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs (browser-style: + or ⌘T for a New Tab); the strip at the bottom holds slide thumbnails.
 - **Right, Chat tab:** one conversation per lecture deck, with Claude, ChatGPT, or Both. Move through the slides and keep asking: the assistants remember the conversation, and each message tells them which slide you're on.
@@ -13,6 +13,8 @@ A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.
 - **Buttons.** *Explain this slide* and *Visualize this slide* are one click for the whole slide. **✂︎ Select area** (or ⌥-drag on the slide, or ⌘⇧A) lets you drag a box over part of a slide like a screenshot; the cut-out goes with your next question, and the buttons become *Explain this area* / *Visualize this area*.
 - **New chat / History.** *New chat* starts a fresh conversation about the deck (long ones get slower and use more of your limits); *History* switches between earlier ones or deletes them. Chats from before v0.1.5 (one per slide) were gathered into one conversation marked "per-slide chats"; the old per-slide file `<name>-<hash>.json` is left unchanged (older versions still read it), and the new conversations are saved in `<name>-<hash>.chat2.json`.
 - Claude and ChatGPT share the conversation: each is shown what the other said that it hasn't seen yet. Each assistant is only "busy" for itself.
+- **Search.** *Search* (⇧⌘F) finds text across saved conversations in every deck, including closed decks and older per-slide chats. Words match regardless of case or accents; results show the deck, slide and matching excerpt, newest first (up to 100). Click a result to reopen its conversation and slide and highlight the message in *All*. Searching does not alter saved chats. A moved or missing PDF must be restored before its result can open.
+- **Slide references.** References such as “slide 12” or “slides 3 and 5” in an assistant's answer are clickable when they name valid app slide numbers. Clicking one opens that slide while keeping the answer visible in *All*. Range endpoints are clickable; code, equations and existing web links are left alone. References use the app's numbering, which may differ from printed slide footers.
 
 ## Using it
 
@@ -24,6 +26,8 @@ A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.
 | Ask | type and press Enter (Shift+Enter for a new line), or *Explain this slide* / *Visualize this slide*. Esc leaves the chat box (so ← → turn slides again) |
 | Ask about part of a slide | **✂︎ Select area** under the chat, ⌥-drag on the slide, or ⌘⇧A; drag a box; Esc cancels. The buttons become *Explain this area* / *Visualize this area* |
 | See the conversation | *This slide* / *All* at the top of the chat; *History* for earlier chats; *New chat* for a fresh one |
+| Find an earlier answer | **Search** at the top of the chat, or ⇧⌘F; type words and click a result to open its deck, conversation and slide |
+| Follow a slide reference | click an underlined slide number in an assistant's answer |
 | Model and effort | click the model button next to Claude / ChatGPT / Both (e.g. "● Opus 5.5 Medium ⌄"): pick a model and slide the effort (also in Settings ⌘,). **Choose models…** picks which models the menu shows; new models appear by themselves (marked *New* for a week). Each answer is labelled with the model and effort it used |
 | Plan usage | bottom right of the chat shows the short version; click it for the usage card: Claude's current session, week (all models) and week (Fable) with bars and reset times, and ChatGPT's limits, with your plan names. The card refreshes when opened (if older than 2 minutes) and with ↻; it also updates after every answer |
 | Link / unlink a walkthrough or notes PDF | Walkthrough tab › 🔗 menu: **Link a walkthrough page or notes PDF…**, **Unlink "…"** for each page, **Link again** for pages you unlinked. A page you link syncs to the slides right away (HTML pages through their slide references, notes PDFs through their slide stamps). Unlinked pages stay out even if they are found again; unlinking a notes PDF also stops Claude reading its .tex |
@@ -90,6 +94,8 @@ Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships onl
 
 Run `scripts/test.sh` on macOS with the Command Line Tools. The Swift Testing suite uses temporary chats and PDFs, fake CLI executables, and a nonpersistent WebKit fixture. It never sends questions to a live AI service or changes your saved chats. XCTest and Xcode are not required. To run one suite, for example: `scripts/test.sh --filter ChatContextTests`.
 
+Version 0.1.7 has 42 tests across eight suites. Search coverage includes unopened decks, legacy migration and deleted-chat handling, unsaved messages, matching and result limits, stale replies, failed-open retries, and revealing the selected message. Slide-reference tests exercise the actual sanitized chat renderer, click messages, bounds and deck/conversation validation, streamed updates, and preservation of code, equations and web links. Both interfaces are checked at a 420px panel width. Set `COLEARNER_TEST_SNAPSHOTS=1` when running the suite to save search and citation previews under `/tmp/colearner-v017-*.png`.
+
 ## Reliability review (2026-10-18)
 
 The six findings below are fixed and covered by regression tests:
@@ -120,6 +126,7 @@ Verified on 2026-10-18: all 23 tests across four suites passed, and the optimize
 | `ProcessRunner.swift` | child processes and line-by-line output |
 | `SlideContext.swift` | slide and area images, the deck header a new conversation gets, slide numbers mentioned in a question |
 | `ChatStore.swift` | conversations per deck on disk (and the v1 → v2 migration) |
+| `ChatSearch.swift`, `ChatNavigation.swift` | read-only search of saved chats, result resolution and slide-link validation |
 | `WalkthroughPane.swift` | walkthrough tab (html pages) |
 | `StudyPDF.swift`, `ScribeMap.swift` | notes PDFs in the walkthrough tab, slide → notes page |
 | `StudyDiscovery.swift` | finds study pages and notes made later and matches them to decks |
@@ -131,6 +138,7 @@ Verified on 2026-10-18: all 23 tests across four suites passed, and the optimize
 
 ## Changelog
 
+- **0.1.7** (2026-10-18): search saved chats across decks with ⇧⌘F, matching excerpts and direct navigation to the conversation, slide and highlighted message. Click slide references in assistant answers to see their source while keeping the answer visible. Includes offline search, navigation and real WebKit regression coverage.
 - **0.1.6** (2026-10-18): six reliability fixes for incomplete ChatGPT answers, crash recovery, refreshed assistant context after source changes, rebuilt notes PDFs, interactive walkthrough keyboard controls, and delayed scrolling across deck switches. Adds 23 offline regression tests across four suites; optimized release build verified. See the reliability review above for findings and coverage.
 - **0.1.5** (2026-10-17): one conversation per deck (deck text up front, slide images on demand, slides you mention attached, This slide / All view, New chat, History); select an area of a slide and ask about it; buttons cut to Explain and Visualize. Per-slide chats migrate into one conversation. Light / Dark / Automatic appearance switch. Browser-style tabs (+ / ⌘T New Tab with the lecture list, ⌘W closes a tab, tabs sized to their titles) with hover highlights on +, ×, the slide arrows and the menus; the Lectures menu lists deck names only. Slides and the right panel open at 3 : 2 (custom divider; double-click resets). Chat and Walkthrough can pop out into their own windows (for an iPad second screen), follow the slides there, dock back on close, and reopen at launch. Stop only stops the assistants being asked, and the answer shows "stopping…" until that assistant has really stopped (no new question can race it); a stopped or failed answer no longer counts as "seen" by that assistant; more ways to name slides ("slide #4", "pg 12", "3 through 6"). Builds are signed with a local certificate, so macOS keeps the Desktop permission across updates; the build script stops on a failed build.
 - **0.1.4** (2026-10-17): link and unlink study pages per deck from the Walkthrough tab (🔗 menu), with Link again; hand-linked pages of two-up decks use the split-slide numbering. Tested with the real library loader on a scratch settings folder (11/11).

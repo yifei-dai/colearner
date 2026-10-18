@@ -297,12 +297,13 @@ final class AppModel: ObservableObject {
     }
 
     /// Open a lecture from the Lectures menu or the lecture list. From a New Tab, it takes that tab's place.
-    func open(_ d: Deck) {
+    @discardableResult
+    func open(_ d: Deck) -> Bool {
         var d = d
         if deck?.path == d.path {
-            _ = refreshDocumentIfNeeded()
+            guard refreshDocumentIfNeeded() else { return false }
             if let deck { chat.sourcesDidChange(for: deck) }
-            return
+            return true
         }
         if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
         let revision = FileRevision.read(d.path)
@@ -311,7 +312,7 @@ final class AppModel: ObservableObject {
             a.messageText = "Could not open \(d.title)"
             a.informativeText = d.path
             a.runModal()
-            return
+            return false
         }
         if let f = doc.frames { d.layout.frames = f }   // the frames actually used (also keys the slide-image cache)
         if deck == nil { newTab = false }   // picked in the New Tab (or nothing was open)
@@ -329,6 +330,7 @@ final class AppModel: ObservableObject {
         chatPages = Set(chat.store.pagesWithChats(d.path))
         chat.sourcesDidChange(for: d)
         chat.showCurrent()
+        return true
     }
 
     /// Reload a replaced PDF before sending context, so the text, images and displayed slides agree.

@@ -10,6 +10,7 @@
 <script src="vendor/marked.umd.js"></script>
 <script src="vendor/purify.min.js"></script>
 <script src="render.js"></script>
+<script src="slide_links.js"></script>
 </head>
 <body>
 <header id="head">
@@ -25,6 +26,7 @@
     <button id="btn-history" class="ghost" title="Earlier chats about this deck">History ⌄</button>
     <button id="btn-new" class="ghost" title="Start a fresh chat about this deck (this one stays in History)">New chat</button>
   </div>
+  <button id="btn-search" class="ghost" title="Search chats across all lecture decks (⇧⌘F)" aria-label="Search all chats">Search</button>
 </header>
 <div id="others" hidden>
   <span class="others-label">Also asked on slides:</span>
@@ -63,6 +65,18 @@
     <button id="usage" title="Plan usage: click for details"></button>
   </div>
 </footer>
+<div id="search-layer" hidden>
+  <section id="search-dialog" role="dialog" aria-modal="true" aria-labelledby="search-title">
+    <div class="search-heading">
+      <h2 id="search-title">Search all chats</h2>
+      <button id="search-close" class="ghost" title="Close search (Esc)" aria-label="Close search">✕</button>
+    </div>
+    <label class="search-label" for="search-input">Search your questions and answers across lecture decks</label>
+    <input id="search-input" type="search" placeholder="Find a topic, question, or explanation…" autocomplete="off" spellcheck="false">
+    <div id="search-status" role="status" aria-live="polite">Type to search your saved chats.</div>
+    <div id="search-results" aria-label="Search results"></div>
+  </section>
+</div>
 <script src="chat.js"></script>
 </body>
 </html>

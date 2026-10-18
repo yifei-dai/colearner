@@ -220,5 +220,32 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .hist .hdel { background: none; border: 0; color: var(--muted); font-size: 12px; visibility: hidden; }
 .hist:hover .hdel { visibility: visible; }
 .hist .hdel:hover { color: var(--warn); }
+
+/* Search stays available even when no lecture is open. */
+#btn-search { flex: 0 0 auto; }
+#search-layer { position: fixed; inset: 0; z-index: 100; padding: 14px; background: rgba(0,0,0,.25); display: flex; align-items: flex-start; justify-content: center; }
+#search-dialog { width: 100%; max-width: 680px; max-height: 100%; min-height: 0; display: flex; flex-direction: column;
+  padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 12px 38px rgba(0,0,0,.22); }
+.search-heading { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+#search-title { font-size: 16px; margin: 0; }
+.search-label { margin: 7px 0; color: var(--muted); font-size: 12px; }
+#search-input { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink); font: inherit; }
+#search-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+#search-status { font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+#search-status.error { color: var(--warn); }
+#search-results { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+.search-result { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; padding: 10px 8px;
+  background: none; border: 0; border-top: 1px solid var(--line); border-radius: 5px; }
+.search-result:hover, .search-result:focus-visible { background: var(--user); outline-color: var(--accent); }
+.search-result-title { font-weight: 600; overflow-wrap: anywhere; }
+.search-result-meta { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.search-result-snippet { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.search-result mark { background: var(--user); color: var(--accent); font-weight: 600; }
+.msg.search-highlight { border-radius: 8px; outline: 2px solid var(--accent); outline-offset: 5px; }
+.slide-ref { display: inline; padding: 0; border: 0; border-radius: 2px; background: none; color: var(--accent); font: inherit;
+  text-decoration: underline; text-underline-offset: 2px; }
+.slide-ref:hover { text-decoration-thickness: 2px; }
+.slide-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* elements with their own display value still obey the hidden attribute */
 [hidden] { display: none !important; }

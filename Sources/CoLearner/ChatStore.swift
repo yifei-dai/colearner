@@ -1,14 +1,13 @@
 import Foundation
-import CryptoKit
 
-enum Provider: String, Codable, CaseIterable {
+enum Provider: String, Codable, CaseIterable, Sendable {
     case claude, codex
     var displayName: String { self == .claude ? "Claude" : "ChatGPT" }
 }
 
-struct ChatMessage: Codable, Identifiable {
-    enum Role: String, Codable { case user, assistant }
-    enum Status: String, Codable { case streaming, done, error, stopped }
+struct ChatMessage: Codable, Identifiable, Sendable {
+    enum Role: String, Codable, Sendable { case user, assistant }
+    enum Status: String, Codable, Sendable { case streaming, done, error, stopped }
 
     var id: String = UUID().uuidString
     var role: Role
@@ -44,7 +43,7 @@ struct ChatMessage: Codable, Identifiable {
 
 /// One conversation about a whole lecture deck. Each message records the slide it was asked on;
 /// each assistant keeps one CLI session for the whole conversation.
-struct Conversation: Codable, Identifiable {
+struct Conversation: Codable, Identifiable, Sendable {
     var id: String = UUID().uuidString
     var created: Date = Date()
     var messages: [ChatMessage] = []
@@ -82,7 +81,7 @@ struct Conversation: Codable, Identifiable {
 }
 
 /// v0.1–v0.1.4: one conversation per slide.
-struct ChatThread: Codable {
+struct ChatThread: Codable, Sendable {
     var page: Int
     var messages: [ChatMessage] = []
     var claudeSession: String?
@@ -90,7 +89,7 @@ struct ChatThread: Codable {
     var seenBy: [String: [String]]?
 }
 
-struct DeckChats: Codable {
+struct DeckChats: Codable, Sendable {
     var deckPath: String
     var conversations: [Conversation]?
     var current: String?
@@ -115,10 +114,7 @@ final class ChatStore {
     }
 
     private func base(_ deckPath: String) -> String {
-        let h = SHA256.hash(data: Data(deckPath.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
-        let name = URL(fileURLWithPath: deckPath).deletingPathExtension().lastPathComponent
-            .replacingOccurrences(of: "/", with: "_")
-        return "\(name)-\(h)"
+        ChatArchiveFile.base(deckPath)
     }
     /// v0.1.5+ chats live in their own file, so an older build (which reads `<base>.json`) never sees them.
     private func fileURL(_ deckPath: String) -> URL { directory.appendingPathComponent(base(deckPath) + ".chat2.json") }
@@ -126,10 +122,7 @@ final class ChatStore {
     private func legacyURL(_ deckPath: String) -> URL { directory.appendingPathComponent(base(deckPath) + ".json") }
 
     private func decode(_ url: URL) -> DeckChats? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
-        return try? dec.decode(DeckChats.self, from: data)
+        ChatArchiveFile.decode(url)
     }
 
     private func load(_ deckPath: String) -> DeckChats {
@@ -177,7 +170,7 @@ final class ChatStore {
                 }
                 let candidates = ((try? fm.contentsOfDirectory(atPath: directory.path)) ?? [])
                     .filter { n in prefixes.contains { n.hasPrefix($0) } }
-                    .sorted { stamp($0) > stamp($1) }
+                    .sorted { a, b in stamp(a) == stamp(b) ? a < b : stamp(a) > stamp(b) }
                 for name in candidates {
                     let u = directory.appendingPathComponent(name)
                     guard let c = decode(u), let convs = c.conversations else { continue }
@@ -193,29 +186,15 @@ final class ChatStore {
         var needSave = false
         if haveNew, let v1 = decode(legacy), v1.conversations == nil, let threads = v1.threads {
             // An older build may have added per-slide chats to <base>.json since: bring in the new ones.
-            let all = threads.values.flatMap { t in t.messages.map { m -> ChatMessage in var m = m; m.page = t.page; return m } }
-            var done = Set(chats.importedV1 ?? []).union((chats.conversations ?? []).flatMap { $0.messages.map(\.id) })
-            if chats.importedV1 == nil {   // chat2 written before this was tracked
-                let convs = chats.conversations ?? []
-                // While the per-slide conversation exists it holds every migrated message, so membership alone is
-                // exact. Without it (deleted, or there never were per-slide chats): messages older than every
-                // conversation were there at migration; later ones were added by an older build.
-                if !convs.contains(where: { $0.legacy == true }) {
-                    if let since = convs.map(\.created).min() {
-                        done.formUnion(all.filter { $0.createdAt < since }.map(\.id))
-                    } else {
-                        done.formUnion(all.map(\.id))
-                    }
-                }
-            }
-            let fresh = all.filter { !done.contains($0.id) }.sorted { $0.createdAt < $1.createdAt }
+            let imported = ChatSearch.legacyImport(threads, into: chats)
+            let fresh = imported.messages
             if let first = fresh.first {
                 var old = Conversation(legacy: true)
                 old.messages = fresh
                 old.created = first.createdAt
                 chats.conversations = (chats.conversations ?? []) + [old]
             }
-            let ids = done.union(fresh.map(\.id))
+            let ids = imported.ids
             if chats.importedV1.map(Set.init) != ids {
                 chats.importedV1 = Array(ids)
                 needSave = true
@@ -313,6 +292,22 @@ final class ChatStore {
     /// All conversations of a deck, newest first.
     func conversations(_ deckPath: String) -> [Conversation] {
         (load(deckPath).conversations ?? []).sorted { $0.created > $1.created }
+    }
+
+    /// Search does not load/migrate histories. Active in-memory histories override their disk snapshots.
+    func search(query: String) async -> [ChatSearchResult] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        let directory = directory, cached = decks
+        let task = Task.detached(priority: .utility) {
+            ChatSearch.find(directory: directory, cached: cached, query: query)
+        }
+        return await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+    }
+
+    /// Resolve by message ID after opening a search result. Unmigrated legacy chats do not yet have a
+    /// persistent conversation ID; loading them here is intentional, after the user chose a result.
+    func locateMessage(deckPath: String, messageID: String) -> Conversation? {
+        load(deckPath).conversations?.first { $0.messages.contains { $0.id == messageID } }
     }
 
     /// Slides that have messages in the current conversation (thumbnail dots, "other slides" chips).
