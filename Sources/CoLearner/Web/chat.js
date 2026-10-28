@@ -7,34 +7,64 @@
   const input = $("#input");
   const sendBtn = $("#btn-send");
 
-  // One click = the whole slide; with an area selected, the same buttons mean that area.
+  // One click = the whole slide. The same buttons mean what else goes with the question, in this order: a selected
+  // area, a quoted walkthrough passage, attached screenshots.
   const VIS_RULES =
     "Make ONE self-contained interactive visual as a single ```html code block (inline SVG or canvas + vanilla JS, " +
     "sliders or buttons where they help, no external files). After the block, say in 2-3 sentences what to look at and what to try.";
   function quick(action) {
-    const area = !!state.area;
-    if (action === "explain") {
-      return area
+    const explain = action === "explain";
+    if (state.area) {
+      return explain
         ? { display: "Explain this area", prompt:
             "Explain the selected area of this slide (the attached crop). Start with the one-sentence takeaway. Then go through " +
             "it piece by piece: define every symbol and say in words what each equation or figure means. Relate it to the rest " +
             "of the slide only where that helps." }
-        : { display: "Explain this slide", prompt:
-            "Explain this slide to me. Start with the one-sentence takeaway. Then go through it piece by piece: define every " +
-            "symbol, say in words what each equation or figure means, and connect it to the slides just before and after when that helps." };
+        : { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES };
     }
-    return area
-      ? { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES }
+    const q = quoted();
+    if (q) {
+      const from = q.kind === "notes" ? "the notes" : "the walkthrough";
+      return explain
+        ? { display: "Explain this passage", prompt:
+            "Explain the passage I quoted from " + from + ". Start with the one-sentence takeaway. Then go through it piece by " +
+            "piece: define every symbol and say in words what each equation means. Connect it to the slides where that helps, " +
+            "and say so if it disagrees with them." }
+        : { display: "Visualize this passage", prompt: "Visualize the idea in the passage I quoted from " + from + ". " + VIS_RULES };
+    }
+    const n = pics().length;
+    if (n) {
+      const shot = n > 1 ? "screenshots" : "screenshot", it = n > 1 ? "them" : "it";
+      return explain
+        ? { display: "Explain the " + shot, prompt:
+            "Explain the attached " + shot + ". Start with the one-sentence takeaway. Then go through " + it + " piece by piece: " +
+            "define every symbol and say in words what each equation or figure means. Relate " + it + " to this deck's slides " +
+            "where that helps." }
+        : { display: "Visualize the " + shot, prompt: "Visualize the key idea in the attached " + shot + ". " + VIS_RULES };
+    }
+    return explain
+      ? { display: "Explain this slide", prompt:
+          "Explain this slide to me. Start with the one-sentence takeaway. Then go through it piece by piece: define every " +
+          "symbol, say in words what each equation or figure means, and connect it to the slides just before and after when that helps." }
       : { display: "Visualize this slide", prompt: "Visualize the key idea of this slide. " + VIS_RULES };
   }
 
   const NAMES = { claude: "Claude", codex: "ChatGPT" };
 
   // messages = the whole conversation about the deck; each carries the slide it was asked on.
+  // images/quote: what waits in the chat box for the next question ([{id, label, thumb}], {id, source, section?, text, kind}).
   let state = { hasDeck: false, deckTitle: "", deckPath: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
-                conversation: null, history: [], area: null };
+                conversation: null, history: [], area: null, images: [], quote: null };
   let viewAll = false;   // "This slide" (default) or "All"
   function visible(m) { return viewAll || m.page == null || m.page === state.page; }
+  // The app owns the pictures and the quote (by id); the page shows them and says which ones a question took.
+  function pics() {
+    return Array.isArray(state.images) ? state.images.filter((i) => i && typeof i.id === "string") : [];
+  }
+  function quoted() {
+    const q = state.quote;
+    return q && typeof q === "object" && typeof q.id === "string" && typeof q.text === "string" && q.text ? q : null;
+  }
   // {claude: {models:[{id,label}], model, efforts:[...], effort}, codex: {...}} — from Swift
   let config = {};
   // {claude: {windows:[{label, percent, resetsAt}], updated}, codex: {...}} — from Swift
@@ -103,9 +133,7 @@
     const note = busyNote();
     const att = $("#attach");
     att.className = note ? "busynote" : "";
-    att.textContent = !state.hasDeck ? "" : note ? note
-      : state.area ? "The selected area of slide " + state.area.page + " goes with your next question"
-      : "Slide " + state.page + " goes with your question";
+    att.textContent = !state.hasDeck ? "" : note ? note : attachLine();
     for (const b of document.querySelectorAll("#providers button")) {
       const on = b.dataset.p === state.provider;
       b.classList.toggle("on", on);
@@ -116,16 +144,100 @@
     sendBtn.textContent = isBusy ? "Stop" : "Send";
     sendBtn.classList.toggle("stop", isBusy);
     sendBtn.disabled = !state.hasDeck;
-    for (const c of document.querySelectorAll(".chip")) c.disabled = !state.hasDeck || (isBusy && c.id !== "btn-area");
+    // Picking an area or a picture for the next question is fine while an answer streams.
+    for (const c of document.querySelectorAll("#quick .chip"))
+      c.disabled = !state.hasDeck || (isBusy && c.id !== "btn-area" && c.id !== "btn-attach");
     const ex = document.querySelector('.chip[data-action="explain"]'), vi = document.querySelector('.chip[data-action="visualize"]');
     ex.textContent = quick("explain").display;
     vi.textContent = quick("visualize").display;
+    const ph = placeholder();
+    if (input.placeholder !== ph) input.placeholder = ph;
     const ab = $("#areabox");
     if (state.area) {
       $("#area-img").src = state.area.thumb;
       $("#area-label").textContent = "Area of slide " + state.area.page;
       ab.hidden = false;
     } else ab.hidden = true;
+    renderAttachments();
+  }
+
+  /// "Slide 4 goes with your question", "Slide 4, 1 screenshot and the walkthrough passage go with your question".
+  function attachLine() {
+    const parts = [state.area ? "The selected area of slide " + state.area.page : "Slide " + state.page];
+    const n = pics().length, q = quoted();
+    if (n) parts.push(n + (n === 1 ? " screenshot" : " screenshots"));
+    if (q) parts.push(q.kind === "notes" ? "the notes passage" : "the walkthrough passage");
+    const last = parts.pop();
+    return (parts.length ? parts.join(", ") + " and " + last + " go" : last + " goes")
+      + (state.area ? " with your next question" : " with your question");
+  }
+  function placeholder() {
+    const n = pics().length;
+    const what = state.area ? "the selected area" : quoted() ? "the passage" : n > 1 ? "the screenshots" : n ? "the screenshot" : "this slide";
+    return "Ask about " + what + "…  (Enter to send, Shift+Enter for a new line)";
+  }
+
+  // ---------- pictures and a quoted passage waiting in the chat box ----------
+  /// "From Lecture 3 Walkthrough › Topic 2 › Rotation matrices" (a notes quote names the notes).
+  function quoteFrom(q) {
+    const source = String(q.source || "").trim() || (q.kind === "notes" ? "the notes" : "the walkthrough");
+    const section = String(q.section || "").trim();
+    return "From " + source + (section ? " › " + section : "");
+  }
+  // Previews come from the app as data URLs; anything else (a web address in an edited chat file) is not loaded.
+  function safeThumb(t) { return typeof t === "string" && /^data:image\//i.test(t); }
+
+  let attachSig = null;
+  function renderAttachments() {
+    const box = $("#attachbox");
+    const list = pics(), q = quoted();
+    // Rebuilt only when they change: renderHeader runs with every streamed update.
+    const sig = JSON.stringify([list.map((i) => [i.id, i.label, String(i.thumb).length]), q]);
+    if (sig === attachSig) return;
+    attachSig = sig;
+    // Removing pictures one after another from the keyboard keeps the focus on the x buttons.
+    const at = Array.from(box.querySelectorAll(".att-x")).indexOf(document.activeElement);
+    box.textContent = "";
+    if (list.length) {
+      const row = el("div", "att-pics");
+      for (const i of list) {
+        const label = String(i.label || "Picture");
+        const chip = el("span", "att-pic");
+        chip.title = label;
+        if (safeThumb(i.thumb)) {
+          const img = el("img");
+          img.src = i.thumb;
+          img.alt = "";
+          chip.appendChild(img);
+        }
+        chip.appendChild(el("span", "att-label", label));
+        chip.appendChild(removeButton("Remove", "Remove " + label, () => post({ type: "removeImage", id: i.id })));
+        row.appendChild(chip);
+      }
+      box.appendChild(row);
+    }
+    if (q) {
+      const card = el("div", "att-quote");
+      const main = el("div", "att-q-main");
+      const from = el("div", "att-q-from", quoteFrom(q));
+      from.title = quoteFrom(q);
+      main.append(from, el("div", "att-q-text", q.text));
+      card.append(main, removeButton("Remove the quoted passage", "Remove the quoted passage", () => post({ type: "clearQuote" })));
+      box.appendChild(card);
+    }
+    box.hidden = !list.length && !q;
+    if (at >= 0) {
+      const xs = box.querySelectorAll(".att-x");
+      (xs[Math.min(at, xs.length - 1)] || input).focus();
+    }
+  }
+  function removeButton(title, label, onclick) {
+    const x = el("button", "att-x", "✕");
+    x.type = "button";
+    x.title = title;
+    x.setAttribute("aria-label", label);
+    x.onclick = onclick;
+    return x;
   }
 
   // ---------- model menu and usage card (popovers) ----------
@@ -577,7 +689,8 @@
     } else if (!state.messages.length) {
       d.innerHTML = "Ask anything about <b>slide " + state.page + "</b>.<br>" +
         "This chat covers the whole deck: move between slides and keep asking; the assistants remember the conversation " +
-        "and see each slide you ask on. Use ✂︎ Select area to ask about part of a slide.";
+        "and see each slide you ask on. Use ✂︎ Select area to ask about part of a slide; paste, drop or 📎 attach a " +
+        "screenshot to ask about that.";
     } else {
       d.innerHTML = "Nothing asked on <b>slide " + state.page + "</b> yet in this chat.<br>Ask away: the assistants remember what you asked on the other slides.";
     }
@@ -675,6 +788,50 @@
     }
   }
 
+  // A passage quoted in a question: about six lines, and the rest on click when there is more (selecting text to copy
+  // doesn't toggle it). Stays open across redraws.
+  const openQuotes = new Set();
+  function quoteBlock(m) {
+    const box = document.createElement("div");
+    box.className = "q-block" + (openQuotes.has(m.id) ? " open" : "");
+    const from = document.createElement("div");
+    from.className = "q-from";
+    from.textContent = from.title = quoteFrom(m.quote);
+    const text = document.createElement("div");
+    text.className = "q-text";
+    text.textContent = m.quote.text;
+    box.append(from, text);
+    const toggle = () => {
+      if (!box.classList.contains("more")) return;
+      const open = !box.classList.contains("open");
+      box.classList.toggle("open", open);
+      if (open) openQuotes.add(m.id); else openQuotes.delete(m.id);
+      fitQuote(box);
+    };
+    box.addEventListener("click", () => { if (!String(window.getSelection() || "")) toggle(); });
+    box.addEventListener("keydown", (e) => {
+      if (e.target === box && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); }
+    });
+    requestAnimationFrame(() => fitQuote(box));   // measured once it is on the page
+    return box;
+  }
+  function fitQuote(box) {
+    if (!box.isConnected) return;
+    const open = box.classList.contains("open"), text = box.querySelector(".q-text");
+    const more = open || text.scrollHeight > text.clientHeight + 1;
+    box.classList.toggle("more", more);
+    if (more) {
+      box.tabIndex = 0;
+      box.setAttribute("role", "button");
+      box.setAttribute("aria-expanded", open ? "true" : "false");
+      box.title = open ? "Show less of the passage" : "Show the whole passage";
+    } else {
+      for (const a of ["tabindex", "role", "aria-expanded", "title"]) box.removeAttribute(a);
+    }
+  }
+  // A narrower panel can clamp a passage that fitted before.
+  window.addEventListener("resize", () => log.querySelectorAll(".q-block").forEach(fitQuote));
+
   function fillMessage(el, m) {
     el.className = "msg " + m.role + (m.provider ? " " + m.provider : "") + (m.status === "streaming" ? " streaming" : "")
       + (m.id === highlightedMessageID ? " search-highlight" : "");
@@ -698,6 +855,21 @@
         img.alt = "selected area";
         b.appendChild(img);
       }
+      if (Array.isArray(m.images)) {
+        const row = document.createElement("div");
+        row.className = "shots";
+        for (const p of m.images) {
+          if (!p || !safeThumb(p.thumb)) continue;
+          const img = document.createElement("img");
+          img.className = "shot";
+          img.src = p.thumb;
+          img.alt = String(p.label || "attached picture");
+          img.title = String(p.label || "");
+          row.appendChild(img);
+        }
+        if (row.firstChild) b.appendChild(row);
+      }
+      if (m.quote && typeof m.quote === "object" && typeof m.quote.text === "string" && m.quote.text) b.appendChild(quoteBlock(m));
       b.appendChild(document.createTextNode(m.display || m.text));
       el.appendChild(b);
       return;
@@ -788,6 +960,8 @@
   // ---------- API for Swift ----------
   window.CL = {
     setThread(s) {
+      // A question's pictures and quote are fixed once it is sent, so the messages' ids, status and text say whether
+      // anything needs redrawing. The pictures and quote waiting in the chat box are redrawn by renderHeader.
       const sig = (x) => (x.conversation ? x.conversation.id : "") + "|" + (x.hasDeck ? x.deckPath : "") + "|" + x.pageCount + "|"
         + (x.hasDeck ? x.deckTitle : "") + "|"
         + (x.messages || []).map((m) => m.id + ":" + m.status + ":" + (m.text || "").length).join(",");
@@ -833,6 +1007,25 @@
       state.area = a || null;
       renderHeader();
     },
+    /// {images: [{id, label, thumb}], quote: {id, source, section?, text, kind} | null}: what waits in the chat box.
+    setAttachments(a) {
+      state.images = a && Array.isArray(a.images) ? a.images : [];
+      state.quote = a && a.quote && typeof a.quote === "object" ? a.quote : null;
+      renderHeader();
+    },
+    showNote,
+    /// The clipboard's text, for a paste the page handed to the app that held no picture after all.
+    pasteText(t) {
+      if (typeof t !== "string" || !t) return;
+      input.focus();
+      // insertText keeps the paste undoable; setRangeText also works when the box can't take focus.
+      let done = false;
+      if (document.activeElement === input) {
+        try { done = document.execCommand("insertText", false, t); } catch (e) { done = false; }
+      }
+      if (!done) input.setRangeText(t, input.selectionStart, input.selectionEnd, "end");
+      autoGrow();
+    },
     setProvider(p) {
       state.provider = p;
       renderHeader();
@@ -869,7 +1062,10 @@
     const q = action ? quick(action) : null;
     const prompt = q ? q.prompt : text.trim();
     if (!prompt) return;
-    post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider, useArea: !!state.area });
+    // The pictures and quote on screen now go with it (one still being read waits for the next question).
+    const quote = quoted();
+    post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider, useArea: !!state.area,
+           imageIDs: pics().map((i) => i.id), quoteID: quote ? quote.id : null });
     if (!q) {
       input.value = "";
       autoGrow();
@@ -930,6 +1126,109 @@
   for (const c of document.querySelectorAll(".chip[data-action]")) c.onclick = () => send("", c.dataset.action);
   $("#btn-area").onclick = () => post({ type: "selectArea" });
   $("#area-clear").onclick = () => post({ type: "clearArea" });
+  $("#btn-attach").onclick = () => post({ type: "chooseImages" });
+
+  // A short line by the status line for a few seconds ("Only pictures can be attached"); warn color for problems.
+  let noteTimer = null;
+  function showNote(n) {
+    const box = $("#note");
+    clearTimeout(noteTimer);
+    box.textContent = n && n.text ? String(n.text) : "";
+    box.classList.toggle("error", !!(n && n.error));
+    noteTimer = setTimeout(() => { box.textContent = ""; box.classList.remove("error"); }, 5000);
+  }
+
+  // Edit › Paste or the context menu with a picture on the clipboard (⌘V itself is caught by the app first): the app
+  // reads the clipboard and attaches the picture, or hands its text back through CL.pasteText.
+  document.addEventListener("paste", (e) => {
+    const cd = e.clipboardData;
+    if (!cd || !state.hasDeck || searchState.open) return;
+    if (!Array.from(cd.types || []).includes("Files") || (cd.getData("text/plain") || "").trim()) return;
+    e.preventDefault();
+    post({ type: "pasteImages" });
+  }, true);
+
+  // ---------- dropping pictures on the chat ----------
+  const dropLayer = $("#drop-layer");
+  const PICTURE_NAME = /\.(png|jpe?g|gif|heic|heif|tiff?|webp|bmp)$/i;
+  const MAX_PICTURES = 8;                     // per question, as in the app (ImageAttachments.maxPending)
+  const MAX_DROP_BYTES = 40 * 1024 * 1024;
+  let dragDepth = 0;   // dragenter/dragleave pairs of nested elements: the overlay stays up until the drag leaves the page
+  function carriesFiles(e) { return !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files"); }
+  function showDrop() {
+    $("#drop-text").textContent = state.hasDeck ? "Drop screenshots or pictures to attach" : "Open a lecture first";
+    dropLayer.classList.toggle("off", !state.hasDeck);
+    dropLayer.hidden = false;
+  }
+  function hideDrop() {
+    dragDepth = 0;
+    dropLayer.hidden = true;
+  }
+  // Text dragged into the chat box keeps the browser's own handling; only files are taken here.
+  document.addEventListener("dragenter", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    showDrop();
+  });
+  document.addEventListener("dragover", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();   // otherwise WebKit takes the drop and tries to open the file
+    e.dataTransfer.dropEffect = "copy";
+    if (dropLayer.hidden) showDrop();
+  });
+  document.addEventListener("dragleave", (e) => {
+    if (!carriesFiles(e)) return;
+    if (--dragDepth <= 0) hideDrop();
+  });
+  document.addEventListener("drop", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    hideDrop();
+    if (state.hasDeck) dropPictures(e.dataTransfer);
+  });
+  document.addEventListener("dragend", hideDrop);
+  // No mouse moves reach the page during a drag: one means a drag that ended without telling the page is over.
+  document.addEventListener("mousemove", () => { if (!dropLayer.hidden) hideDrop(); });
+
+  function fileNames(names) {
+    const q = names.slice(0, 2).map((n) => "“" + n + "”");
+    return names.length <= 2 ? q.join(" and ") : q.join(", ") + " and " + (names.length - 2) + " more";
+  }
+  function dropPictures(dt) {
+    const files = Array.from(dt.files || []);
+    // Files promised by the app they come from (a browser, Photos) can't be read here: the app reads the drag.
+    if (!files.length) { post({ type: "dropImages" }); return; }
+    const pictures = [], skipped = [], large = [];
+    for (const f of files) {
+      const name = String(f.name || "");
+      if (!/^image\//i.test(f.type || "") && !PICTURE_NAME.test(name)) skipped.push(name);
+      else if (f.size > MAX_DROP_BYTES) large.push(name);
+      else pictures.push(f);
+    }
+    const room = Math.max(0, MAX_PICTURES - pics().length);
+    const notes = [];
+    if (skipped.length) notes.push("Only pictures can be attached (skipped " + fileNames(skipped) + ").");
+    if (large.length) notes.push(fileNames(large) + (large.length === 1 ? " is" : " are") + " too large to attach.");
+    if (pictures.length > room) notes.push("At most " + MAX_PICTURES + " pictures go with one question.");
+    if (notes.length) showNote({ text: notes.join(" "), error: true });
+    readPictures(pictures.slice(0, room));
+  }
+  // One file at a time, in the order dropped; the app decodes and scales each.
+  function readPictures(files) {
+    const f = files.shift();
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      if (typeof r.result === "string" && r.result.startsWith("data:")) post({ type: "attachImageData", name: f.name, data: r.result });
+      readPictures(files);
+    };
+    r.onerror = () => {
+      showNote({ text: "Couldn’t read “" + f.name + "”.", error: true });
+      readPictures(files);
+    };
+    r.readAsDataURL(f);
+  }
   for (const b of document.querySelectorAll("#viewseg button"))
     b.onclick = () => { viewAll = b.dataset.v === "all"; renderAll(); };
   $("#btn-new").onclick = () => post({ type: "newChat" });
