@@ -42,6 +42,12 @@ struct CoLearnerApp: App {
                 }.keyboardShortcut("f", modifiers: [.command, .shift])
                 Button("Select Area of Slide…") { model.beginAreaSelection() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("Ask About Walkthrough") { model.askAboutWalkthrough() }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                    .disabled(model.currentStudyPages.isEmpty)
+                Button("Select Area of Walkthrough…") { model.beginWalkthroughAreaSelection() }
+                    .keyboardShortcut("a", modifiers: [.command, .option, .shift])
+                    .disabled(model.currentStudyPages.isEmpty)
                 Button("Show Walkthrough") { model.showPanel(.walkthrough) }
                     .keyboardShortcut("2", modifiers: .command)
                 Button("Show Chat") { model.showPanel(.chat) }

@@ -141,11 +141,20 @@ final class AppModel: ObservableObject {
     }
     /// True while the user is dragging out an area of the slide to ask about.
     @Published var selectingArea = false
+    /// The same for an area of the walkthrough page or notes (one selection at a time).
+    @Published var selectingWalkthroughArea = false {
+        didSet { if selectingWalkthroughArea != oldValue { walk.showCrosshair(selectingWalkthroughArea) } }
+    }
 
     lazy var chat = ChatController(model: self)
     lazy var walk: WalkthroughController = {
         let w = WalkthroughController()
         w.onTurn = { [weak self] d in self?.go(d) }
+        w.onAsk = { [weak self] q in
+            // Only from the page shown for this deck (a hidden tab can still hold another deck's page).
+            guard let self, self.walk.loadedPath == self.currentStudyPage?.path else { return }
+            self.ask(quote: q)
+        }
         return w
     }()
     lazy var studyPDF = StudyPDFController()
@@ -182,9 +191,10 @@ final class AppModel: ObservableObject {
     /// ← and → turn slides anywhere in the window, except while typing in a text box or using a visual.
     private func installArrowKeys() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            if let self, e.keyCode == 53, self.selectingArea, NSApp.modalWindow == nil,
+            if let self, e.keyCode == 53, self.selectingArea || self.selectingWalkthroughArea, NSApp.modalWindow == nil,
                let w = e.window, w === (self.mainWindow ?? w) || self.popOuts.contains(w), !(w is NSPanel) {
                 self.selectingArea = false   // Esc ends area selection (other windows keep their Esc)
+                self.selectingWalkthroughArea = false
                 return nil
             }
             // ⌘V with a screenshot or picture on the clipboard attaches it to the chat, from the chat page or with
@@ -262,6 +272,7 @@ final class AppModel: ObservableObject {
         guard newTab else { return }
         if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
         selectingArea = false
+        selectingWalkthroughArea = false
         deck = nil
         document = nil
         slideTexts = []
@@ -336,6 +347,7 @@ final class AppModel: ObservableObject {
         if let f = doc.frames { d.layout.frames = f }   // the frames actually used (also keys the slide-image cache)
         if deck == nil { newTab = false }   // picked in the New Tab (or nothing was open)
         selectingArea = false
+        selectingWalkthroughArea = false
         if !openDecks.contains(where: { $0.path == d.path }) { openDecks.append(d) }
         deck = d
         document = doc.document
@@ -386,6 +398,7 @@ final class AppModel: ObservableObject {
         openDecks.remove(at: i)
         if deck?.path == d.path {
             selectingArea = false
+            selectingWalkthroughArea = false
             showRemainingTab(preferred: openDecks.isEmpty ? nil : min(i, openDecks.count - 1))   // a New Tab stays
             return
         }
@@ -448,6 +461,7 @@ final class AppModel: ObservableObject {
 
     func openPDFPanel() {
         selectingArea = false
+        selectingWalkthroughArea = false
         let p = NSOpenPanel()
         p.allowedContentTypes = [.pdf]
         p.allowsMultipleSelection = false
@@ -467,6 +481,7 @@ final class AppModel: ObservableObject {
     /// built-in links: HTML pages through their slide references, notes PDFs through their slide stamps.
     func linkStudyPagePanel() {
         guard let d = deck else { return }
+        selectingWalkthroughArea = false
         let p = NSOpenPanel()
         p.allowedContentTypes = [.html, .pdf]
         p.message = "Choose a walkthrough or review page (.html) or a notes PDF for \(d.title)"
@@ -552,6 +567,7 @@ final class AppModel: ObservableObject {
 
     func beginAreaSelection() {
         guard document != nil else { return }
+        selectingWalkthroughArea = false   // one selection at a time
         if !poppedOut.contains(.chat) { rightTab = .chat }   // a popped-out chat stays where it is
         selectingArea = true
         // Started from a pop-out (or Settings): the slide's window must be key for the crosshair, the drag and Esc.
@@ -569,6 +585,91 @@ final class AppModel: ObservableObject {
         if index + 1 != page { page = index + 1 }
         if !poppedOut.contains(.chat) { rightTab = .chat }
         chat.setArea(page: index + 1, url: cut.url, thumb: cut.thumb)
+    }
+
+    // MARK: asking about the walkthrough
+
+    /// The Walkthrough tab's Ask button and Slides › Ask About Walkthrough (⇧⌘L): the selected text, else the section
+    /// being read. In notes: the selected text, else the notes page on screen as a picture.
+    func askAboutWalkthrough() {
+        guard deck != nil, let page = currentStudyPage else { NSSound.beep(); return }
+        if page.isPDF {
+            // Notes never opened in this tab (or another deck's still there): bring them up first.
+            guard studyPDF.path == page.path, studyPDF.view.document != nil else { showPanel(.walkthrough); return }
+            if let q = studyPDF.selectionQuote() {
+                ask(quote: q)
+            } else if let shot = studyPDF.pageImage() {
+                chat.addImage(cgImage: shot.image, label: "Notes p. \(shot.page)",
+                              detail: "page \(shot.page) of the typed notes “\(page.title)”")
+                showChatForQuestion()
+            } else {
+                NSSound.beep()
+            }
+            return
+        }
+        guard walk.loadedPath == page.path else { showPanel(.walkthrough); return }
+        walk.collectQuote { [weak self] q in
+            guard let self, self.currentStudyPage?.path == page.path else { return }
+            if let q { self.ask(quote: q); return }
+            // Nothing to quote (a mind map, a page without sections): the part of the page on screen, as a picture.
+            // A page that isn't on screen comes up instead.
+            guard self.walk.webView.window != nil else { self.showPanel(.walkthrough); return }
+            self.walk.capture(self.walk.webView.bounds) { image, _ in
+                guard let image else { NSSound.beep(); return }
+                self.chat.addImage(cgImage: image, label: "Walkthrough view",
+                                   detail: "a capture of the part of the walkthrough page “\(page.title)” on screen")
+                self.showChatForQuestion()
+            }
+        }
+    }
+
+    /// A passage from the walkthrough or notes goes into the chat box, and the chat comes up for the question.
+    func ask(quote q: ChatQuote) {
+        guard deck != nil else { return }
+        chat.setQuote(q)
+        showChatForQuestion()
+    }
+
+    /// As for Ask About This Slide: the chat panel, with its input focused once it's back in a window.
+    private func showChatForQuestion() {
+        showPanel(.chat)
+        DispatchQueue.main.async { self.chat.focusInput() }
+    }
+
+    /// Select Area of Walkthrough (⌥⇧⌘A) and ✂︎ in the Walkthrough tab: drag a box over the page or notes.
+    func beginWalkthroughAreaSelection() {
+        guard deck != nil, currentStudyPage != nil else { return }
+        selectingArea = false   // one selection at a time
+        showPanel(.walkthrough)
+        selectingWalkthroughArea = true
+        // Started from the menu or another window: the walkthrough's window must be key for the crosshair, the drag
+        // and Esc.
+        let w = poppedOut.contains(.walkthrough) ? popOuts.window(for: .walkthrough) : mainWindow
+        if let w, !w.isKeyWindow { w.makeKeyAndOrderFront(nil) }
+    }
+
+    /// The box dragged out over the walkthrough (`r` in the layer's coordinates; `content` is the page or notes view
+    /// under it): a picture of that part goes to the chat.
+    func finishWalkthroughAreaSelection(_ r: NSRect, on overlay: AreaSelectView, over content: NSView) {
+        selectingWalkthroughArea = false
+        guard deck != nil, let page = currentStudyPage else { return }
+        if page.isPDF {
+            guard content === studyPDF.view, studyPDF.path == page.path, let area = overlay.pdfArea(r, in: studyPDF.view),
+                  let shot = studyPDF.areaImage(page: area.page, rect: area.rect) else { return }
+            chat.addImage(cgImage: shot.image, label: "Notes p. \(shot.page)",
+                          detail: "a capture of part of page \(shot.page) of the typed notes “\(page.title)”")
+            showChatForQuestion()
+            return
+        }
+        guard content === walk.webView, walk.loadedPath == page.path else { return }
+        walk.capture(overlay.convert(r, to: walk.webView)) { [weak self] image, section in
+            guard let self else { return }
+            guard let image else { NSSound.beep(); return }
+            var detail = "a capture of part of the walkthrough page “\(page.title)”"
+            if let section { detail += ", in the section “\(section)”" }
+            self.chat.addImage(cgImage: image, label: "Walkthrough area", detail: detail)
+            self.showChatForQuestion()
+        }
     }
 
     func go(_ delta: Int) {
