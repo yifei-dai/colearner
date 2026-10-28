@@ -148,18 +148,24 @@ enum DeckContext {
         return note
     }
 
-    /// A passage the student quoted from the deck's walkthrough page or notes, put before the question.
-    static func excerpt(_ q: ChatQuote) -> String {
-        let tag = q.kind == "notes" ? "notes_excerpt" : "walkthrough_excerpt"
+    /// A passage the student quoted from the deck's walkthrough page or notes, or from an earlier answer, put before the
+    /// question. `p` is the assistant being asked (an answer of its own is "your earlier answer").
+    static func excerpt(_ q: ChatQuote, for p: Provider? = nil) -> String {
+        let page = "the walkthrough page for this deck (a study page written from these slides)"
+        let tag: String, intro: String
+        switch q.kind {
+        case "notes": (tag, intro) = ("notes_excerpt", "The student selected this passage in the typed notes for this deck:")
+        case "section": (tag, intro) = ("walkthrough_excerpt", "The student is reading this section of \(page):")
+        case "reply":
+            let whose = p != nil && q.provider == p ? "your" : (q.provider?.displayName ?? "an assistant") + "’s"
+            (tag, intro) = ("answer_excerpt", "The student selected this part of \(whose) earlier answer in this chat:")
+        default: (tag, intro) = ("walkthrough_excerpt", "The student selected this passage on \(page):")
+        }
         func attribute(_ s: String) -> String {
             s.replacingOccurrences(of: "\"", with: "'").components(separatedBy: .newlines).joined(separator: " ")
         }
         var open = "<\(tag) from=\"\(attribute(q.source))\""
         if let s = q.section, !s.isEmpty { open += " where=\"\(attribute(s))\"" }
-        let page = "the walkthrough page for this deck (a study page written from these slides)"
-        let intro = q.kind == "notes" ? "The student selected this passage in the typed notes for this deck:"
-            : q.kind == "section" ? "The student is reading this section of \(page):"
-            : "The student selected this passage on \(page):"
         let text = q.text.replacingOccurrences(of: "</\(tag)>", with: "</ \(tag)>")
         return "\(intro)\n\(open)>\n\(text)\n</\(tag)>\n"
     }

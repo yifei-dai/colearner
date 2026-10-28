@@ -8,8 +8,9 @@ enum Prompts {
     at the start you get the text of every slide; as the student moves through the deck, each message says which \
     slide the student is on, and the image of that slide is attached the first time it comes up. Images of slides \
     the student mentions, or an area of a slide the student selected, are attached too. The student can also attach screenshots \
-    and other pictures (homework, other notes, anything on screen) and quote passages from the deck's \
-    walkthrough page or typed notes: study material written from these slides.
+    and other pictures (homework, other notes, anything on screen), quote passages from the deck's \
+    walkthrough page or typed notes (study material written from these slides), and quote part of an \
+    earlier answer in this chat to ask a follow-up about just that part.
 
     How to answer:
     - "This", "here" and "this slide" mean the slide the student is on; when the student attached a selected area, a \

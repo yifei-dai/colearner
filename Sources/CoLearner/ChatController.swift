@@ -447,6 +447,16 @@ final class ChatController: NSObject, WKNavigationDelegate {
         pushAttachments()
     }
 
+    /// Part of an answer the student selected to ask about: whose answer it is and the slide it was given on. Only a
+    /// finished answer (a streaming one is still being redrawn).
+    static func replyQuote(text: String, to m: ChatMessage) -> ChatQuote? {
+        guard m.role == .assistant, m.status != .streaming else { return nil }
+        let t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(ChatQuote.maxText))
+        guard !t.isEmpty else { return nil }
+        return ChatQuote(source: (m.provider?.displayName ?? "The assistant") + "’s answer", section: m.page.map { "slide \($0)" },
+                         text: t, kind: "reply", provider: m.provider)
+    }
+
     private func dropQuote() {
         pendingQuote = nil
         quoteDeck = nil
@@ -535,6 +545,12 @@ final class ChatController: NSObject, WKNavigationDelegate {
             if let id = body["id"] as? String { removeImage(id) }
         case "clearQuote":
             clearQuote()
+        case "quoteReply":
+            // "Reply" on part of an answer: the page sends the selected text and the answer it came from.
+            guard let d = model.deck, let id = body["messageID"] as? String, let text = body["text"] as? String,
+                  let m = store.current(d.path).messages.first(where: { $0.id == id }),
+                  let q = Self.replyQuote(text: text, to: m) else { return }
+            setQuote(q)
         case "newChat":
             guard let d = model.deck else { return }
             store.startNew(d.path)
@@ -653,7 +669,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             }
             if let a = areaNow { images.append(a.url) }
             images += shots.map(\.url)
-            if let q = quoteNow { prompt += DeckContext.excerpt(q) }
+            if let q = quoteNow { prompt += DeckContext.excerpt(q, for: p) }
             prompt += DeckContext.questionNote(page: page, count: count, slides: shown, area: areaNow != nil,
                                                images: shots.map(\.detail), quote: quoteNow != nil)
                 + "\n<question>\n\(text)\n</question>"

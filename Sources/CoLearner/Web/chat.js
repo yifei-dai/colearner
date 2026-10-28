@@ -6,6 +6,7 @@
   const log = $("#log");
   const input = $("#input");
   const sendBtn = $("#btn-send");
+  const replyBtn = $("#reply-btn");
 
   // One click = the whole slide. The same buttons mean what else goes with the question, in this order: a selected
   // area, a quoted walkthrough passage, attached screenshots.
@@ -23,6 +24,13 @@
         : { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES };
     }
     const q = quoted();
+    if (q && q.kind === "reply") {
+      return explain
+        ? { display: "Explain this part", prompt:
+            "Explain the part of the answer I quoted in more depth. Start with the one-sentence takeaway. Then go through it " +
+            "step by step: define every symbol and say in words what each equation means." }
+        : { display: "Visualize this part", prompt: "Visualize the idea in the part of the answer I quoted. " + VIS_RULES };
+    }
     if (q) {
       const from = q.kind === "notes" ? "the notes" : "the walkthrough";
       return explain
@@ -166,14 +174,16 @@
     const parts = [state.area ? "The selected area of slide " + state.area.page : "Slide " + state.page];
     const n = pics().length, q = quoted();
     if (n) parts.push(n + (n === 1 ? " screenshot" : " screenshots"));
-    if (q) parts.push(q.kind === "notes" ? "the notes passage" : "the walkthrough passage");
+    if (q) parts.push(q.kind === "notes" ? "the notes passage" : q.kind === "reply" ? "the quoted part of the answer" : "the walkthrough passage");
     const last = parts.pop();
     return (parts.length ? parts.join(", ") + " and " + last + " go" : last + " goes")
       + (state.area ? " with your next question" : " with your question");
   }
   function placeholder() {
     const n = pics().length;
-    const what = state.area ? "the selected area" : quoted() ? "the passage" : n > 1 ? "the screenshots" : n ? "the screenshot" : "this slide";
+    const q = quoted();
+    const what = state.area ? "the selected area" : q ? (q.kind === "reply" ? "the quoted part" : "the passage")
+      : n > 1 ? "the screenshots" : n ? "the screenshot" : "this slide";
     return "Ask about " + what + "…  (Enter to send, Shift+Enter for a new line)";
   }
 
@@ -927,6 +937,7 @@
   }
 
   function renderAll() {
+    hideReply();   // the selection it stood by is gone
     elById.clear();
     log.textContent = "";
     if (state.conversation && state.conversation.legacy && state.messages.length) log.appendChild(legacyBanner());
@@ -1229,6 +1240,108 @@
     };
     r.readAsDataURL(f);
   }
+  // ---------- Reply: ask about part of an answer ----------
+  // Select part of a finished answer and a Reply button appears by it; the part goes into the chat box as a quote
+  // (formulas as their TeX) for the next question.
+  /// The selection, when both its ends lie in the same finished answer.
+  function replySelection() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed || !String(sel).trim()) return null;
+    const range = sel.getRangeAt(0);
+    const body = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return e ? e.closest(".msg.assistant .body") : null; };
+    const b = body(range.startContainer);
+    if (!b || b !== body(range.endContainer)) return null;
+    const msg = b.closest(".msg");
+    if (!msg || msg.classList.contains("streaming") || !msg.dataset.messageId) return null;
+    return { sel, range, id: msg.dataset.messageId };
+  }
+  /// The selected part as the reader sees it: one line per block, formulas as $…$ / $$…$$ from KaTeX's TeX annotation,
+  /// code as written; visuals and buttons left out.
+  function answerText(range) {
+    const formula = (k) => {
+      const a = k.querySelector('annotation[encoding="application/x-tex"]');
+      const t = (a ? a.textContent : k.textContent).trim();
+      return k.closest(".katex-display") ? "$$" + t + "$$" : "$" + t + "$";
+    };
+    let root = range.commonAncestorContainer;
+    if (root.nodeType !== 1) root = root.parentElement;
+    const inFormula = root && root.closest(".katex");
+    if (inFormula) return formula(inFormula);   // a selection inside one formula takes all of it
+    let out = "";
+    const br = () => { out = out.replace(/[ \t]+$/, ""); if (out && !out.endsWith("\n")) out += "\n"; };
+    const walk = (node) => {
+      for (let ch = node.firstChild; ch; ch = ch.nextSibling) {
+        if (!range.intersectsNode(ch)) continue;
+        if (ch.nodeType === 3) {
+          let t = ch.nodeValue;
+          if (ch === range.endContainer) t = t.slice(0, range.endOffset);
+          if (ch === range.startContainer) t = t.slice(range.startOffset);
+          out += ch.parentElement.closest("pre") ? t : t.replace(/\s+/g, " ");
+          continue;
+        }
+        if (ch.nodeType !== 1) continue;
+        const tag = ch.tagName.toUpperCase();
+        if (tag === "BR") { out += "\n"; continue; }
+        if (ch.classList.contains("katex")) {
+          const display = !!ch.closest(".katex-display");
+          if (display) br();
+          out += formula(ch);
+          if (display) br();
+          continue;
+        }
+        if (ch.classList.contains("slide-ref")) { out += ch.textContent; continue; }
+        if (/^(SCRIPT|STYLE|IFRAME|SVG|CANVAS|IMG|BUTTON)$/.test(tag) || ch.classList.contains("visual")) continue;
+        const block = /^(P|DIV|LI|UL|OL|PRE|H[1-6]|TABLE|TR|BLOCKQUOTE)$/.test(tag);
+        if (block) br();
+        if (tag === "LI") out += ch.parentElement && ch.parentElement.tagName === "OL"
+          ? (Array.prototype.indexOf.call(ch.parentElement.children, ch) + (Number(ch.parentElement.getAttribute("start")) || 1)) + ". " : "- ";
+        if ((tag === "TD" || tag === "TH") && ch.previousElementSibling) out += " | ";
+        walk(ch);
+        if (block) br();
+      }
+    };
+    walk(root);
+    return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 8000);
+  }
+  function hideReply() { replyBtn.hidden = true; }
+  /// Below the end of the selection (the right end of its lowest line), inside the conversation; hidden while that
+  /// line is scrolled out of view.
+  function placeReply() {
+    const s = replySelection();
+    if (!s) { hideReply(); return; }
+    const rects = Array.from(s.range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
+    if (!rects.length) { hideReply(); return; }
+    let last = rects[0];
+    for (const r of rects) if (r.bottom > last.bottom + 1 || (Math.abs(r.bottom - last.bottom) <= 1 && r.right > last.right)) last = r;
+    const lr = log.getBoundingClientRect();
+    replyBtn.hidden = false;
+    replyBtn.style.visibility = last.bottom < lr.top || last.top > lr.bottom ? "hidden" : "";
+    const w = replyBtn.offsetWidth, h = replyBtn.offsetHeight;
+    let y = last.bottom + 6;
+    if (y + h > lr.bottom - 4) y = last.top - h - 6;
+    replyBtn.style.left = Math.round(Math.max(lr.left + 6, Math.min(last.right - w + 10, lr.right - w - 6))) + "px";
+    replyBtn.style.top = Math.round(Math.max(lr.top + 4, y)) + "px";
+  }
+  // After the selection settles (double and triple clicks too).
+  document.addEventListener("mouseup", (e) => { if (e.target !== replyBtn) setTimeout(placeReply, 0); });
+  document.addEventListener("keyup", (e) => { if (e.shiftKey) setTimeout(placeReply, 0); });
+  document.addEventListener("selectionchange", () => { if (!replyBtn.hidden) placeReply(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideReply(); }, true);
+  document.addEventListener("mousedown", (e) => { if (e.target !== replyBtn) hideReply(); }, true);
+  log.addEventListener("scroll", () => { if (!replyBtn.hidden) placeReply(); }, { passive: true });
+  window.addEventListener("resize", () => { if (!replyBtn.hidden) placeReply(); });
+  replyBtn.addEventListener("mousedown", (e) => e.preventDefault());   // keeps the selection until the click
+  replyBtn.onclick = () => {
+    const s = replySelection();
+    hideReply();
+    if (!s || !state.hasDeck) return;
+    const text = answerText(s.range);
+    if (!text) return;
+    post({ type: "quoteReply", messageID: s.id, text });
+    s.sel.removeAllRanges();
+    input.focus();
+  };
+
   for (const b of document.querySelectorAll("#viewseg button"))
     b.onclick = () => { viewAll = b.dataset.v === "all"; renderAll(); };
   $("#btn-new").onclick = () => post({ type: "newChat" });

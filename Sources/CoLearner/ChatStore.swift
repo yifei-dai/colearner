@@ -53,19 +53,22 @@ struct MessageImage: Codable, Equatable, Sendable {
     var thumb: String
 }
 
-/// Text the student quoted from the deck's walkthrough page or notes PDF ("Ask" in the Walkthrough tab).
+/// Text the student quoted: from the deck's walkthrough page or notes PDF ("Ask" in the Walkthrough tab), or part of an
+/// earlier answer ("Reply" in the chat).
 struct ChatQuote: Codable, Equatable, Sendable {
     static let maxText = 8_000
 
     var id: String = UUID().uuidString
-    /// The study page: "Lecture 3 Walkthrough", "L03_notes".
+    /// The study page ("Lecture 3 Walkthrough", "L03_notes"), or whose answer ("Claude’s answer").
     var source: String
-    /// Where on it: "Topic 2 › Rotation matrices", "page 7".
+    /// Where on it: "Topic 2 › Rotation matrices", "page 7", "slide 5".
     var section: String?
     var text: String
-    /// "selection" (text selected on a walkthrough page), "section" (the section being read) or "notes" (text
-    /// selected in a notes PDF).
+    /// "selection" (text selected on a walkthrough page), "section" (the section being read), "notes" (text
+    /// selected in a notes PDF) or "reply" (part of an answer in the chat).
     var kind: String = "selection"
+    /// For "reply": the assistant whose answer it is.
+    var provider: Provider?
 
     var js: [String: Any] {
         var d: [String: Any] = ["id": id, "source": source, "text": text, "kind": kind]
