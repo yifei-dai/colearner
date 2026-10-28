@@ -1,6 +1,6 @@
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.8.
+A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.1.9.
 
 - **Left:** the lecture slides. The bar on top holds the lecture picker and the open decks as tabs (browser-style: + or ⌘T for a New Tab); the strip at the bottom holds slide thumbnails.
 - **Right, Chat tab:** one conversation per lecture deck, with Claude, ChatGPT, or Both. Move through the slides and keep asking: the assistants remember the conversation, and each message tells them which slide you're on.
@@ -8,9 +8,11 @@ A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.
 
 ### How the chat works
 
-- **What the assistants get.** A new conversation starts with the text of every slide (cheap) and the image of the slide you're on. Afterwards each question is tagged "you're on slide N"; a slide's image is attached the first time it comes up, and so are slides you mention ("compare with slide 3", "slides 5–8"). Claude can also open any slide image itself.
+- **What the assistants get.** A new conversation starts with the text of every slide (cheap) and the image of the slide you're on. Afterwards each question is tagged "you're on slide N"; a slide's image is attached the first time it comes up, and so are slides you mention ("compare with slide 3", "slides 5–8"). Claude can also open any slide image itself. Pictures and quoted passages go to whichever assistants you ask; when the other one is asked later, it gets the quoted text and is told which pictures it did not see.
 - **What you see.** *This slide* shows what you asked on the slide on screen; *All* shows the whole conversation with a slide tag on each question (click it to jump). "Also asked on slides" and orange dots on the thumbnails show where you asked before.
 - **Buttons.** *Explain this slide* and *Visualize this slide* are one click for the whole slide. **✂︎ Select area** (or ⌥-drag on the slide, or ⌘⇧A) lets you drag a box over part of a slide like a screenshot; the cut-out goes with your next question, and the buttons become *Explain this area* / *Visualize this area*.
+- **Screenshots and pictures.** Paste a screenshot with ⌘V (⌃⇧⌘4 copies one; ⌘V works in the chat or with the slides in focus), drop picture files or the screenshot thumbnail on the chat, or click **📎 Screenshot** to pick files (it opens in your screenshot folder). Up to 8 go with your next question, shown above the chat box (× removes one); the buttons become *Explain the screenshot* / *Visualize the screenshot*. Pictures are scaled to at most 1568 px, like slide images.
+- **Asking about the walkthrough.** Select text on a walkthrough page and click **Ask about this**, or use **Ask** in the Walkthrough tab's bar (⇧⌘L): the selected text, or else the section you are reading, goes to the chat as a quoted passage (math keeps its TeX). In a notes PDF, Ask sends the selected text, or else the page as a picture. The **crop** button (⌥⇧⌘A, or ⌥-drag on the walkthrough) captures a box of the walkthrough as a picture. The passage or capture goes with your next question and the buttons become *Explain this passage* / *Visualize this passage*. The assistants are told it comes from a study page written from the slides, and that the slides win if the two disagree.
 - **New chat / History.** *New chat* starts a fresh conversation about the deck (long ones get slower and use more of your limits); *History* switches between earlier ones or deletes them. Chats from before v0.1.5 (one per slide) were gathered into one conversation marked "per-slide chats"; the old per-slide file `<name>-<hash>.json` is left unchanged (older versions still read it), and the new conversations are saved in `<name>-<hash>.chat2.json`.
 - Claude and ChatGPT share the conversation: each is shown what the other said that it hasn't seen yet. Each assistant is only "busy" for itself.
 - **Search.** *Search* (⇧⌘F) finds text across saved conversations in every deck, including closed decks and older per-slide chats. Words match regardless of case or accents; results show the deck, slide and matching excerpt, newest first (up to 100). Click a result to reopen its conversation and slide and highlight the message in *All*. Searching does not alter saved chats. A moved or missing PDF must be restored before its result can open.
@@ -25,6 +27,8 @@ A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.
 | Next / previous slide | → / ← (anywhere, except while typing in the chat box or using a visual or slider), ⌘] / ⌘[ , or click a thumbnail |
 | Ask | type and press Enter (Shift+Enter for a new line), or *Explain this slide* / *Visualize this slide*. Esc leaves the chat box (so ← → turn slides again) |
 | Ask about part of a slide | **✂︎ Select area** under the chat, ⌥-drag on the slide, or ⌘⇧A; drag a box; Esc cancels. The buttons become *Explain this area* / *Visualize this area* |
+| Ask about a screenshot or picture | ⌘V a copied screenshot (⌃⇧⌘4), drop picture files on the chat, or **📎 Screenshot** under the chat. × on a picture removes it |
+| Ask about the walkthrough | select text on the page and click **Ask about this**; or **Ask** in the Walkthrough bar (⇧⌘L) for the selection or the section you are reading (notes PDFs: the selection or the page); or the crop button (⌥⇧⌘A, ⌥-drag on the page) for a box of it; Esc cancels |
 | See the conversation | *This slide* / *All* at the top of the chat; *History* for earlier chats; *New chat* for a fresh one |
 | Find an earlier answer | **Search** at the top of the chat, or ⇧⌘F; type words and click a result to open its deck, conversation and slide |
 | Follow a slide reference | click an underlined slide number in an assistant's answer |
@@ -62,6 +66,7 @@ Each conversation (one per deck) keeps one Claude session and one Codex thread, 
 | Links you add with the 🔗 button | `~/Library/Application Support/Co-learner/links.json` |
 | Your own library override (optional) | `~/Library/Application Support/Co-learner/library.json` |
 | Rendered slide images sent to the assistants | `~/Library/Caches/Co-learner/slides/` |
+| Pictures and slide areas sent with questions (removed after a week) | `~/Library/Caches/Co-learner/attachments/`, `…/areas/` |
 
 ## The library
 
@@ -124,7 +129,8 @@ Verified on 2026-10-18: all 23 tests across four suites passed, and the optimize
 | `ChatController.swift` | chat web view bridge, sending, streaming, stop |
 | `Backends.swift` | Claude Code and Codex runners and their JSON parsers |
 | `ProcessRunner.swift` | child processes and line-by-line output |
-| `SlideContext.swift` | slide and area images, the deck header a new conversation gets, slide numbers mentioned in a question |
+| `SlideContext.swift` | slide and area images, the deck header a new conversation gets, the note and quoted passage before each question, slide numbers mentioned in a question |
+| `Attachments.swift` | screenshots and other pictures for the chat: decoding, scaling, what a paste attaches, the screenshot folder |
 | `ChatStore.swift` | conversations per deck on disk (and the v1 → v2 migration) |
 | `ChatSearch.swift`, `ChatNavigation.swift` | read-only search of saved chats, result resolution and slide-link validation |
 | `WalkthroughPane.swift` | walkthrough tab (html pages) |
@@ -138,6 +144,7 @@ Verified on 2026-10-18: all 23 tests across four suites passed, and the optimize
 
 ## Changelog
 
+- **0.1.9** (2026-10-28): attach screenshots and other pictures to a question (⌘V, drop, or 📎 Screenshot); ask about the walkthrough: select text and click *Ask about this*, *Ask* for the section you are reading or the notes page, or capture a box of the walkthrough. Quoted passages keep their math as TeX, are saved with the question and found by Search; the other assistant is told what went with earlier questions.
 - **0.1.8** (2026-10-18): add a saved Fast mode toggle to the ChatGPT model selector and Settings, with Fast labels on the selector and answers. Keeps model and reasoning effort unchanged and explicitly applies Fast or standard speed to new and resumed turns. Includes offline CLI and WebKit coverage.
 - **0.1.7** (2026-10-18): search saved chats across decks with ⇧⌘F, matching excerpts and direct navigation to the conversation, slide and highlighted message. Click slide references in assistant answers to see their source while keeping the answer visible. Includes offline search, navigation and real WebKit regression coverage.
 - **0.1.6** (2026-10-18): six reliability fixes for incomplete ChatGPT answers, crash recovery, refreshed assistant context after source changes, rebuilt notes PDFs, interactive walkthrough keyboard controls, and delayed scrolling across deck switches. Adds 23 offline regression tests across four suites; optimized release build verified. See the reliability review above for findings and coverage.

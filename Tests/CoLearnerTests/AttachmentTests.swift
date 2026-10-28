@@ -137,12 +137,12 @@ struct AttachmentTests {
 
     @Test func copiedScreenshotsAttach() throws {
         let png = try encode(try image(width: 40, height: 30), .png)
-        try withPasteboard { pb in
+        withPasteboard { pb in
             pb.setData(png, forType: .png)
             #expect(ImageAttachments.items(on: pb) == [.data(png)])
         }
         let tiff = try #require(NSImage(cgImage: try image(width: 40, height: 30), size: .zero).tiffRepresentation)
-        try withPasteboard { pb in
+        withPasteboard { pb in
             pb.setData(tiff, forType: .tiff)
             #expect(ImageAttachments.items(on: pb) == [.data(tiff)])
         }
@@ -150,13 +150,13 @@ struct AttachmentTests {
 
     @Test func copiedTextPastesAsTextEvenWithAPicture() throws {
         let png = try encode(try image(width: 40, height: 30), .png)
-        try withPasteboard { pb in
+        withPasteboard { pb in
             pb.declareTypes([.png, .string], owner: nil)
             pb.setData(png, forType: .png)
             pb.setString("Rotation matrices are orthogonal", forType: .string)
             #expect(ImageAttachments.items(on: pb).isEmpty)
         }
-        try withPasteboard { pb in
+        withPasteboard { pb in
             // A browser's Copy Image: the picture and its address.
             pb.declareTypes([.png, .string], owner: nil)
             pb.setData(png, forType: .png)
