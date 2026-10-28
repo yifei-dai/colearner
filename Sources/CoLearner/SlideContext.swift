@@ -134,6 +134,36 @@ enum DeckContext {
         return s + "</lecture_deck>\n\n"
     }
 
+    /// The line before the question: the slide the student is on, the images attached (in order), and what "this" is.
+    /// `images` are the prompt names of attached pictures ("an image the student pasted").
+    static func questionNote(page: Int, count: Int, slides: [Int], area: Bool, images: [String], quote: Bool) -> String {
+        var note = "[The student is on slide \(page) of \(count).]"
+        var parts = slides.map { "slide \($0)" }
+        if area { parts.append("the area of slide \(page) the student selected") }
+        parts += images
+        if !parts.isEmpty { note += " Attached images, in order: " + parts.joined(separator: ", ") + "." }
+        if quote { note += " The question is about the quoted passage." }
+        else if area { note += " The question is about the selected area." }
+        else if !images.isEmpty { note += " The question is about the attached \(images.count == 1 ? "image" : "images")." }
+        return note
+    }
+
+    /// A passage the student quoted from the deck's walkthrough page or notes, put before the question.
+    static func excerpt(_ q: ChatQuote) -> String {
+        let tag = q.kind == "notes" ? "notes_excerpt" : "walkthrough_excerpt"
+        func attribute(_ s: String) -> String {
+            s.replacingOccurrences(of: "\"", with: "'").components(separatedBy: .newlines).joined(separator: " ")
+        }
+        var open = "<\(tag) from=\"\(attribute(q.source))\""
+        if let s = q.section, !s.isEmpty { open += " where=\"\(attribute(s))\"" }
+        let page = "the walkthrough page for this deck (a study page written from these slides)"
+        let intro = q.kind == "notes" ? "The student selected this passage in the typed notes for this deck:"
+            : q.kind == "section" ? "The student is reading this section of \(page):"
+            : "The student selected this passage on \(page):"
+        let text = q.text.replacingOccurrences(of: "</\(tag)>", with: "</ \(tag)>")
+        return "\(intro)\n\(open)>\n\(text)\n</\(tag)>\n"
+    }
+
     /// Slide numbers mentioned in a question: "slide 5", "slides 5-8", "p. 3", "pages 3 and 7", "slides 2, 4, and 9",
     /// "slide #4", "pg 12", "slides 3 through 6".
     static func referencedSlides(in text: String, pageCount: Int) -> [Int] {

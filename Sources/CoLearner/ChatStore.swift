@@ -26,6 +26,10 @@ struct ChatMessage: Codable, Identifiable, Sendable {
     var areaThumb: String?
     /// An answer stopped or cut off before it reached its assistant's session: quoted back to it once.
     var notInSession: Bool?
+    /// Screenshots and other pictures that went with the question.
+    var images: [MessageImage]?
+    /// Text quoted from the deck's walkthrough page or notes that went with the question.
+    var quote: ChatQuote?
 
     /// The dictionary handed to chat.js.
     var js: [String: Any] {
@@ -37,6 +41,35 @@ struct ChatMessage: Codable, Identifiable, Sendable {
         if let model { d["model"] = model }
         if let page { d["page"] = page }
         if let areaThumb { d["areaThumb"] = areaThumb }
+        if let images, !images.isEmpty { d["images"] = images.map { ["label": $0.label, "thumb": $0.thumb] } }
+        if let quote { d["quote"] = quote.js }
+        return d
+    }
+}
+
+/// A picture that went with a question: its label and a small preview (data URL).
+struct MessageImage: Codable, Equatable, Sendable {
+    var label: String
+    var thumb: String
+}
+
+/// Text the student quoted from the deck's walkthrough page or notes PDF ("Ask" in the Walkthrough tab).
+struct ChatQuote: Codable, Equatable, Sendable {
+    static let maxText = 8_000
+
+    var id: String = UUID().uuidString
+    /// The study page: "Lecture 3 Walkthrough", "L03_notes".
+    var source: String
+    /// Where on it: "Topic 2 › Rotation matrices", "page 7".
+    var section: String?
+    var text: String
+    /// "selection" (text selected on a walkthrough page), "section" (the section being read) or "notes" (text
+    /// selected in a notes PDF).
+    var kind: String = "selection"
+
+    var js: [String: Any] {
+        var d: [String: Any] = ["id": id, "source": source, "text": text, "kind": kind]
+        if let section { d["section"] = section }
         return d
     }
 }
