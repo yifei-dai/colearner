@@ -211,6 +211,36 @@ struct WalkthroughAskTests {
         #expect(page.asks.isEmpty)
     }
 
+    @Test func scrollingHidesTheButtonUntilThePageIsStill() async throws {
+        let page = try AskPage()
+        defer { page.close() }
+        try await page.load()
+        try await page.select("p3")
+        try await page.mouseUp(on: "p3")
+        try await page.waitFor(AskPage.buttonShown)
+        // Scroll events only hide it: placing it looks under it with hit tests, too slow for every event of a big page.
+        let during = try await page.evaluate("""
+            (function () {
+              window.scrollBy(0, 30);
+              for (var i = 0; i < 20; i++) window.dispatchEvent(new Event('scroll'));
+              return getComputedStyle(document.querySelector('colearner-ask')).visibility;
+            })()
+            """) as? String
+        #expect(during == "hidden")
+        // Once the page is still, it is placed again, just below the line where the selection now ends.
+        try await page.waitFor(AskPage.buttonShown)
+        let state = try #require(try await page.json(AskPage.buttonState))
+        let line = try #require(try await page.json("JSON.parse(JSON.stringify(getSelection().getRangeAt(0).getBoundingClientRect()))"))
+        let top = try #require(state["top"] as? Double), bottom = try #require(line["bottom"] as? Double)
+        #expect(state["hit"] as? Bool == true)
+        #expect(top >= bottom && top <= bottom + 20)
+        // The same after a resize.
+        #expect(try await page.evaluate("""
+            window.dispatchEvent(new Event('resize')); getComputedStyle(document.querySelector('colearner-ask')).visibility
+            """) as? String == "hidden")
+        try await page.waitFor(AskPage.buttonShown)
+    }
+
     @Test func noButtonForSelectionsInsideTextFields() async throws {
         let page = try AskPage()
         defer { page.close() }
@@ -429,6 +459,140 @@ struct WalkthroughAskTests {
         #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == #"Before typesetting: $v\tp$"#)
     }
 
+    @Test func checkedAnswersAreQuotedWithTheStudentsAnswerAndThePagesMarks() async throws {
+        let page = try AskPage(html: AskPage.more)
+        defer { page.close() }
+        try await page.load()
+        func text(_ id: String) async throws -> String {
+            try await page.string("__coLearnerAsk.textOf(document.getElementById('\(id)'))")
+        }
+        #expect(try await text("mc") == "Checkpoint\nWhich pair fits a Roomba?\nA. Mobile, wheeled\nB. Fixed manipulator\nC. Airborne")
+        // Picking C: the page marks it wrong and A right, and its feedback only points at the colors.
+        _ = try await page.evaluate("document.querySelectorAll('#mc .q-opt')[2].click(); true")
+        #expect(try await text("mc") == """
+            Checkpoint
+            Which pair fits a Roomba?
+            A. Mobile, wheeled (correct answer)
+            B. Fixed manipulator
+            C. Airborne (the student's answer)
+            Not quite. The highlighted option is right.
+            """)
+        // Typed answers: what is in each box, then how the page marked it once checked (an empty box it marked too).
+        #expect(try await text("num") == "Checkpoint\nWhere is the point in {b}?\nfirst entry\nsecond entry\nCheck")
+        _ = try await page.evaluate("document.getElementById('num-x').value = ' 3 '; document.querySelector('#num [data-check]').click(); true")
+        #expect(try await text("num") == """
+            Checkpoint
+            Where is the point in {b}?
+            first entry
+            [3] (marked right)
+            second entry
+            [] (marked wrong)
+            Check
+            Not yet. Red boxes are off.
+            """)
+        // A box in a sentence, typed but not checked; checkboxes are still left out.
+        #expect(try await text("inline") == "The step is long, rounded.")
+        _ = try await page.evaluate("document.getElementById('step').value = '2.5'; true")
+        #expect(try await text("inline") == "The step is [2.5] long, rounded.")
+        // As a selection, the way the button sends it.
+        try await page.select("mc")
+        #expect((try await page.json("__coLearnerAsk.collect()")?["text"] as? String)?.contains("C. Airborne (the student's answer)") == true)
+    }
+
+    @Test func listingsKeepTheirLineNumbersAndIndentation() async throws {
+        let page = try AskPage(html: AskPage.more)
+        defer { page.close() }
+        try await page.load()
+        // counter(ln), with a comment line that isn't numbered (lines are counted as the page draws them).
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('min'))") == """
+            /* the child with the lowest utility */
+            1  function MINIMIZE(state)
+            2    if TERMINAL-TEST(state):
+            3      return ⟨NULL, EVAL(state)⟩
+            """)
+        #expect(try await page.string("""
+            (function () {
+              var li = document.querySelectorAll('#min li'), r = document.createRange();
+              r.setStartBefore(li[2]); r.setEndAfter(li[3]);
+              return __coLearnerAsk.textOf(r);
+            })()
+            """) == "2    if TERMINAL-TEST(state):\n3      return ⟨NULL, EVAL(state)⟩")
+        // attr(data-l) and padding steps: two spaces a step beyond the least indented numbered line.
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('merge'))") == """
+            Input: two trees
+            1  for i = 1 to ℓ do
+            2    extend T_{1}
+            First, extend one tree
+            3      return merged
+            6, 7    swap the trees
+            8  return failure
+            """)
+    }
+
+    @Test func calloutLabelsAreSetOffFromTheirText() async throws {
+        let page = try AskPage(html: AskPage.more)
+        defer { page.close() }
+        try await page.load()
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('trap'))")
+                == "Trap Do not subtract the origin from a velocity, undo it.")
+    }
+
+    @Test func sectionPathKeepsMathInHeadingsAsTeX() async throws {
+        let page = try AskPage(html: AskPage.more)
+        defer { page.close() }
+        try await page.load()
+        #expect(try await page.string("__coLearnerAsk.sectionOf(document.getElementById('cost'))")
+                == "Topic 3 · Minimax › Cost of minimax › Where $b^m$ and $bm$ come from")
+        try await page.select("cost")
+        let quote = try await page.json("__coLearnerAsk.collect()")
+        #expect(quote?["section"] as? String == "Topic 3 · Minimax › Cost of minimax › Where $b^m$ and $bm$ come from")
+        // The index keeps its plain titles (matching slides and the "Showing:" line use them).
+        #expect(try await page.string("""
+            __coLearnerWT.index().entries.filter(function (e) { return e.kind === 'heading' && /^Where/.test(e.title); })[0].title
+            """) == "Where bm and bm come from")
+        // A page macro in a title is defined at the end of the quote, like one in the text.
+        _ = try await page.evaluate(#"items[0].math = '\\bm{b}^m'; MathJax.config = { tex: { macros: { bm: ['\\boldsymbol{#1}', 1] } } }; true"#)
+        let macro = try await page.json("__coLearnerAsk.collect()")
+        #expect(macro?["section"] as? String == #"Topic 3 · Minimax › Cost of minimax › Where $\bm{b}^m$ and $bm$ come from"#)
+        #expect(macro?["text"] as? String == "A uniform tree of depth m has many leaves.\n\n"
+                + #"Macros used above (defined by this page): \bm{#1} = \boldsymbol{#1}"#)
+    }
+
+    @Test func labelsOfAFigureAloneAreNoSelection() async throws {
+        let page = try AskPage(html: AskPage.more)
+        defer { page.close() }
+        try await page.load()
+        // A drag that misses a demo's handle selects the drawing's labels: they have text to copy, but no button
+        // comes up and Ask quotes the section being read.
+        let copied = try await page.evaluate("""
+            (function () {
+              var plot = document.getElementById('plot'), t = plot.querySelectorAll('text');
+              plot.scrollIntoView({block: 'center'});
+              getSelection().setBaseAndExtent(plot, 0, t[2].firstChild, 1);
+              return getSelection().toString().trim();
+            })()
+            """) as? String
+        #expect(copied?.isEmpty == false)
+        try await page.mouseUp(on: "plot")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(try await page.evaluate(AskPage.buttonShown) as? Bool == false)
+        #expect(try await page.json("__coLearnerAsk.collect()")?["kind"] as? String == "section")
+        // Inside one label.
+        _ = try await page.evaluate("var t = document.querySelector('#plot text').firstChild; getSelection().setBaseAndExtent(t, 0, t, 3); true")
+        try await page.mouseUp(on: "plot")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(try await page.evaluate(AskPage.buttonShown) as? Bool == false)
+        #expect(try await page.json("__coLearnerAsk.collect()")?["kind"] as? String == "section")
+        // From the drawing into its caption: the caption is the quote.
+        _ = try await page.evaluate("""
+            var q = document.querySelectorAll('#plot text')[2].firstChild, cap = document.getElementById('cap').firstChild;
+            getSelection().setBaseAndExtent(q, 0, cap, cap.length); true
+            """)
+        try await page.mouseUp(on: "cap")
+        try await page.waitFor(AskPage.buttonShown)
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == "Drag the round handle.")
+    }
+
     // MARK: the controller
 
     @Test func controllerTurnsOnlyValidAskMessagesFromItsPageIntoQuotes() async throws {
@@ -545,7 +709,13 @@ private final class AskPage: NSObject, WKScriptMessageHandler {
     var url: URL { directory.appendingPathComponent("Ask Fixture.html") }
 
     static let ready = "!!window.__coLearnerAsk && !!window.__coLearnerWT && document.readyState === 'complete'"
-    static let buttonShown = "(function () { var h = document.querySelector('colearner-ask'); return !!h && getComputedStyle(h).display !== 'none'; })()"
+    /// Up and visible: not hidden while the page scrolls or with its selection scrolled away.
+    static let buttonShown = """
+        (function () {
+          var h = document.querySelector('colearner-ask'), cs = h && getComputedStyle(h);
+          return !!h && cs.display !== 'none' && cs.visibility !== 'hidden';
+        })()
+        """
     static let buttonState = """
         (function () {
           var h = document.querySelector('colearner-ask'), r = h.getBoundingClientRect();
@@ -594,15 +764,21 @@ private final class AskPage: NSObject, WKScriptMessageHandler {
         return try JSONSerialization.jsonObject(with: Data(s.utf8), options: [.fragmentsAllowed]) as? [String: Any]
     }
 
-    /// Selects an element's text, scrolled into the middle of the view.
+    /// Selects an element's text, scrolled into the middle of the view, once the page has had the scroll event (a
+    /// scroll hides the button until the page is still, and one landing after it showed would hide it again).
     func select(_ id: String) async throws {
         _ = try await evaluate("""
             (function () {
-              var e = document.getElementById('\(id)'); e.scrollIntoView({block: 'center'});
+              var e = document.getElementById('\(id)'), y = pageYOffset;
+              window.__scrolled = false;
+              e.scrollIntoView({block: 'center'});
+              if (pageYOffset === y) window.__scrolled = true;
+              else window.addEventListener('scroll', function () { window.__scrolled = true; }, {once: true});
               var r = document.createRange(); r.selectNodeContents(e);
               var s = getSelection(); s.removeAllRanges(); s.addRange(r); return true;
             })()
             """)
+        try await waitFor("window.__scrolled === true")
     }
 
     /// The end of a mouse selection, as the page sees it.
@@ -776,6 +952,134 @@ private final class AskPage: NSObject, WKScriptMessageHandler {
               bm: ["\\boldsymbol{#1}", 1], Qsp: "\\mathcal{Q}", Qfree: "\\Qsp_{\\text{free}}", unused: "\\text{never}" } } },
             startup: { document: { math: list } }
           };
+        </script>
+        </body></html>
+        """#
+
+    /// More of what study pages have: checkpoints whose own script marks the answer (copied from the pages: the right
+    /// choice gets .correct, a wrong pick .wrong, a checked box .good or .wrongc), a text box in a sentence, a callout
+    /// label set off by its margin, pseudocode listings numbered with CSS (counter() with an unnumbered comment line,
+    /// attr(data-l) with padding steps, a caption and a less indented Input line), a heading with formulas, and a demo
+    /// figure whose SVG labels can be selected.
+    nonisolated static let more = #"""
+        <!doctype html>
+        <html><head><meta charset="utf-8"><title>Ask more fixture</title>
+        <style>
+          body { margin: 0; font: 16px/1.5 -apple-system, sans-serif; }
+          .topnav { position: sticky; top: 0; height: 40px; background: #ddd; }
+          section { padding: 0 20px; }
+          mjx-assistive-mml { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(1px, 1px, 1px, 1px);
+            -webkit-user-select: none; user-select: none; }
+          .cp-opts { display: grid; gap: 8px; }
+          .q-opt { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left; font: inherit; padding: 10px 12px; }
+          .cp-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+          .num-in { width: 5em; }
+          .tl { font-weight: 700; margin-right: 8px; }
+          ol.pseudo { list-style: none; counter-reset: ln; padding: 0; font: 13.5px/1.6 monospace; }
+          ol.pseudo li { counter-increment: ln; position: relative; padding-left: 3.6em; white-space: pre; }
+          ol.pseudo li::before { content: counter(ln); position: absolute; left: 0; width: 2.4em; text-align: right; }
+          ol.pseudo li:first-child { counter-increment: none; white-space: normal; }
+          ol.pseudo li:first-child::before { content: none; }
+          ol.code { list-style: none; padding: 0; font-size: 14px; }
+          ol.code li { position: relative; padding-left: 2.6em; }
+          ol.code li[data-l]::before { content: attr(data-l); position: absolute; left: 0.5em; }
+          ol.code li.io { padding-left: 10px; }
+          ol.code li.in1 { padding-left: 3.6em; }
+          ol.code li.in2 { padding-left: 4.6em; }
+          ol.code .cap { display: block; font-style: italic; }
+          .tall { height: 900px; }
+        </style></head>
+        <body>
+        <nav class="topnav"><a href="#check">Checkpoints</a> <a href="#code">Listings</a></nav>
+        <main>
+        <section class="topic" id="check">
+          <h2>Topic 1 · Checkpoints</h2>
+          <div class="cp" data-cp="mc" data-ans="0" id="mc">
+            <p class="cp-h">Checkpoint</p>
+            <p class="cp-q">Which pair fits a Roomba?</p>
+            <div class="cp-opts">
+              <button class="q-opt" type="button"><span class="k">A</span><span class="t">Mobile, wheeled</span></button>
+              <button class="q-opt" type="button"><span class="k">B</span><span class="t">Fixed manipulator</span></button>
+              <button class="q-opt" type="button"><span class="k">C</span><span class="t">Airborne</span></button>
+            </div>
+            <div class="cp-fb" hidden><p class="verdict"></p></div>
+          </div>
+          <div class="cp" data-cp="num" data-ans="3,-1" id="num">
+            <p class="cp-h">Checkpoint</p>
+            <p class="cp-q">Where is the point in {b}?</p>
+            <div class="cp-row">
+              <label class="ctl-label" for="num-x">first entry</label><input class="num-in" id="num-x" autocomplete="off">
+              <label class="ctl-label" for="num-y">second entry</label><input class="num-in" id="num-y" autocomplete="off">
+              <button class="btn" type="button" data-check>Check</button>
+            </div>
+            <div class="cp-fb" hidden><p class="verdict"></p></div>
+          </div>
+          <p id="inline">The step is <input class="num-in" id="step"> long, <input type="checkbox" checked> rounded.</p>
+          <p class="trap" id="trap"><span class="tl">Trap</span>Do not subtract the origin from a velocity, <span>un</span>do it.</p>
+        </section>
+        <section class="topic" id="code">
+          <h2>Topic 2 · Listings</h2>
+          <ol class="pseudo" id="min">
+            <li>/* the child with the lowest utility */</li>
+            <li>function MINIMIZE(state)</li>
+            <li>  if TERMINAL-TEST(state):</li>
+            <li>    return ⟨NULL, EVAL(state)⟩</li>
+          </ol>
+          <ol class="code" id="merge">
+            <li class="io">Input: two trees</li>
+            <li data-l="1">for i = 1 to ℓ do</li>
+            <li data-l="2" class="in1">extend T<sub>1</sub><span class="cap">First, extend one tree</span></li>
+            <li data-l="3" class="in2">return merged</li>
+            <li data-l="6, 7" class="in1">swap the trees</li>
+            <li data-l="8">return failure</li>
+          </ol>
+        </section>
+        <section class="topic" id="figs">
+          <h2>Topic 3 · Minimax</h2>
+          <div class="sub" id="cost-sub">
+            <h3>Cost of minimax</h3>
+            <h4>Where <mjx-container class="MathJax" jax="SVG"><svg width="20" height="16"></svg><mjx-assistive-mml><math><msup><mi>b</mi><mi>m</mi></msup></math></mjx-assistive-mml></mjx-container> and <mjx-container class="MathJax" jax="SVG"><svg width="20" height="16"></svg><mjx-assistive-mml><math><mi>b</mi><mi>m</mi></math></mjx-assistive-mml></mjx-container> come from</h4>
+            <p id="cost">A uniform tree of depth m has many leaves.</p>
+            <figure class="fig" id="demo">
+              <div class="plot" id="plot"><svg width="300" height="120"><circle cx="40" cy="60" r="8"></circle><text x="70" y="40">{c}</text><text x="70" y="80">p</text><text x="140" y="80">q</text></svg></div>
+              <figcaption id="cap">Drag the round handle.</figcaption>
+            </figure>
+          </div>
+        </section>
+        <div class="tall"></div>
+        </main>
+        <script>
+          document.querySelectorAll(".cp[data-cp]").forEach(function (cp) {
+            var fb = cp.querySelector(".cp-fb"), verdict = cp.querySelector(".verdict");
+            function say(msg) { fb.hidden = false; verdict.textContent = msg; }
+            if (cp.dataset.cp === "mc") {
+              var ans = +cp.dataset.ans, btns = Array.from(cp.querySelectorAll(".cp-opts .q-opt"));
+              btns.forEach(function (b, j) {
+                b.addEventListener("click", function () {
+                  btns.forEach(function (x) { x.disabled = true; x.classList.remove("correct", "wrong"); });
+                  btns[ans].classList.add("correct");
+                  if (j !== ans) b.classList.add("wrong");
+                  say(j === ans ? "Correct." : "Not quite. The highlighted option is right.");
+                });
+              });
+            } else {
+              var want = cp.dataset.ans.split(",").map(Number), ins = Array.from(cp.querySelectorAll("input.num-in"));
+              cp.querySelector("[data-check]").addEventListener("click", function () {
+                var ok = true;
+                ins.forEach(function (inp, i) {
+                  var good = inp.value.trim() !== "" && Number(inp.value) === want[i];
+                  inp.classList.toggle("good", good); inp.classList.toggle("wrongc", !good);
+                  if (!good) ok = false;
+                });
+                say(ok ? "Correct." : "Not yet. Red boxes are off.");
+              });
+            }
+          });
+          var c = document.querySelectorAll("mjx-container");
+          var items = [{ typesetRoot: c[0], math: "b^m", display: false }, { typesetRoot: c[1], math: "bm", display: false }];
+          var list = {};
+          list[Symbol.iterator] = function* () { for (var i = 0; i < items.length; i++) yield items[i]; };
+          window.MathJax = { startup: { document: { math: list } } };
         </script>
         </body></html>
         """#

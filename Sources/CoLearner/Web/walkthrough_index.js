@@ -19,7 +19,7 @@
  *   __coLearnerWT.coverage({file? | deck?, pages})  -> {pages, counts:{<match>: n}, byPage:[{page, match, ...}]}
  *   __coLearnerWT.deckKeyFromFile("01b-intro.pdf") -> "01b"   ("7-search.pdf" -> "L7", other names -> "")
  *   __coLearnerWT.entryAt(node) -> the innermost section / subsection / heading span holding node, or null
- *       -> {n, title, kind, anchor, path:[titles], el, block, end}   (used by walkthrough_ask.js)
+ *       -> {n, title, kind, anchor, path:[titles], titleEls, el, block, end}   (used by walkthrough_ask.js)
  *
  * "page" is always the 1-based PDF page index of the deck shown in the app.
  * Printed slide numbers in the page text are converted per course:
@@ -547,8 +547,10 @@
 
   /* ---------------- where a node sits (walkthrough_ask.js: "Ask about this") ---------------- */
   /* The innermost section, subsection or heading span holding `node`, or null when none does (the top bar, a mind
-     map): {n, title, kind, anchor, path:[titles, as locate gives them], el, block, end}. A heading span (el = its
-     heading) runs to the next heading of the same or a higher level in its block (end), else to the block's end. */
+     map): {n, title, kind, anchor, path:[titles, as locate gives them], titleEls, el, block, end}. titleEls are the
+     headings of the path's entries (null where there is none), for reading their titles with math as TeX: titles
+     are textContent, where MathJax's copy for screen readers turns b^m into "bm". A heading span (el = its heading)
+     runs to the next heading of the same or a higher level in its block (end), else to the block's end. */
   function entryAt(node) {
     var idx = getIndex(), el = node && (node.nodeType === 1 ? node : node.parentElement);
     if (!el || idx.family !== "dom") return null;
@@ -570,10 +572,13 @@
         break;
       }
     }
-    var e = spans.length ? spans[spans.length - 1] : block, path = [];
-    for (var p = e; p; p = p.parent >= 0 ? E[p.parent] : null) path.unshift(p.title);
-    return { n: e.n, title: e.title, kind: e.kind, anchor: e.anchor, path: path, el: e.el, block: block.el,
-      end: e === block ? null : end };
+    var e = spans.length ? spans[spans.length - 1] : block, path = [], titleEls = [];
+    for (var p = e; p; p = p.parent >= 0 ? E[p.parent] : null) {
+      path.unshift(p.title);
+      titleEls.unshift(p.kind === "heading" ? p.el : p.titleEl);
+    }
+    return { n: e.n, title: e.title, kind: e.kind, anchor: e.anchor, path: path, titleEls: titleEls, el: e.el,
+      block: block.el, end: e === block ? null : end };
   }
 
   function coverage(q) {

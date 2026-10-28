@@ -15,10 +15,13 @@
  *   - __coLearnerAsk.crosshair(on) -> a crosshair cursor everywhere while the app drags out an area.
  *   - __coLearnerAsk.textOf(range | node), sectionOf(node) -> the extraction and the path below (also for tests).
  * "text" keeps math as TeX ($...$ and $$...$$ from MathJax 3's own records, KaTeX's TeX annotation; <sup>/<sub> as
- * ^{...}/_{...}), skips hidden parts, form fields and figures, keeps button text (an answer choice reads "A. ..."),
- * and puts each block on its own line (a button's flex items share one). A quote that uses the page's own MathJax
- * macros (\tp, \Rot, ...) ends with a line defining them. "section" is the path of titles the app's "Showing: ..."
- * line uses (__coLearnerWT.entryAt), joined with " › "; mind maps have none.
+ * ^{...}/_{...}), skips hidden parts, figures and form fields other than text boxes (what is typed in one reads
+ * "[...]"), keeps button text (an answer choice reads "A. ..."), says how the page marked an answer ("(the student's
+ * answer)", "(correct answer)", "(marked wrong)", "(marked right)"), keeps the line numbers and indentation that
+ * pseudocode listings draw with CSS, and puts each block on its own line (a button's flex items share one). Labels of
+ * a figure alone are no selection. A quote that uses the page's own MathJax macros (\tp, \Rot, ...) ends with a line
+ * defining them. "section" is the path of the titles of the sections it is in (__coLearnerWT.entryAt), read the same
+ * way (math as TeX), joined with " › "; mind maps have none.
  */
 (function () {
   "use strict";
@@ -28,7 +31,8 @@
   var MAX_SELECTION = 8000, MAX_SECTION = 6000;
 
   /* ---------------- text, with math as TeX ---------------- */
-  /* not read: code, media, drawings and form fields (button text is: answer choices are buttons) */
+  /* not read: code, media, drawings and form fields (button text is: answer choices are buttons; so is what is typed
+     in a text box, an answer the page may have marked) */
   var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, CANVAS: 1, IFRAME: 1, VIDEO: 1, AUDIO: 1,
     IMG: 1, INPUT: 1, TEXTAREA: 1, SELECT: 1, "MJX-ASSISTIVE-MML": 1 };
 
@@ -85,6 +89,32 @@
     n = isNaN(n) ? 1 : n;
     for (var s = li.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === "LI") n++;
     return n + ". ";
+  }
+  /* what a list line's ::before draws: pseudocode listings number their lines with it ("" for nothing) */
+  function drawn(li) {
+    var c = getComputedStyle(li, "::before").content;
+    return c && c !== "none" && c !== "normal" ? c : "";
+  }
+  var LINE_NO = /^"\d+(\s*[,\u2013-]\s*\d+)*"$/;   /* from attr(data-l): "3", "6, 7" */
+  function isLineNo(c) { return LINE_NO.test(c) || /^counter\(/.test(c); }
+  /* the number a listing draws before a line, "3  ", or "". A counter counts the lines before it that draw
+     something (a comment line may not, and isn't counted). */
+  function lineMark(li) {
+    var c = drawn(li);
+    if (LINE_NO.test(c)) return c.slice(1, -1) + "  ";
+    if (!/^counter\(/.test(c)) return "";
+    var n = 1;
+    for (var s = li.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === "LI" && drawn(s)) n++;
+    return n + "  ";
+  }
+  /* how the pages mark an answer once it is checked: the choice picked, when it is wrong, and the right one; a text
+     box whose entry is off or right */
+  function answerMark(el) {
+    var c = el.classList;
+    if (el.tagName === "BUTTON") {
+      return c.contains("wrong") ? "(the student's answer)" : c.contains("correct") ? "(correct answer)" : "";
+    }
+    return c.contains("wrongc") ? "(marked wrong)" : c.contains("good") ? "(marked right)" : "";
   }
   /* an answer choice's key: the lone letter or number before its text in a button ("A" reads "A. ...") */
   function isKey(el) {
@@ -163,10 +193,39 @@
       full = was;
       if (s) put(mark + "{" + s + "}");
     }
+    function note(s) { if (s) { space(); put(s); } }
+    /* a text box: what is typed in it, "[...]", and the page's mark once it is checked (an unmarked empty one is
+       left out) */
+    function box(el) {
+      var cs = getComputedStyle(el), v = String(el.value).replace(/\s+/g, " ").trim(), m = answerMark(el);
+      if (!rendered(el, cs) || (!v && !m)) return;
+      var inline = /^inline/.test(cs.display);
+      if (inline) space(); else br();
+      put("[" + v + "]");
+      note(m);
+      if (inline) space(); else br();
+    }
+    /* A listing line's number, then its indentation, which pages draw with padding steps (classes in1, in2, ...):
+       two spaces a step (1em) beyond the least indented numbered line of its list (header lines are less indented). */
+    var least = new Map();
+    function codeLine(li, cs) {
+      var mark = lineMark(li), list = li.parentElement, min = least.get(list);
+      if (!mark) return "";
+      if (min === undefined) {
+        min = Infinity;
+        for (var s = list.firstElementChild; s; s = s.nextElementSibling) {
+          if (s.tagName === "LI" && isLineNo(drawn(s))) min = Math.min(min, parseFloat(getComputedStyle(s).paddingLeft) || 0);
+        }
+        least.set(list, min);
+      }
+      var steps = Math.round(((parseFloat(cs.paddingLeft) || 0) - min) / (parseFloat(cs.fontSize) || 16));
+      return mark + (steps > 0 ? "  ".repeat(Math.min(steps, 12)) : "");
+    }
     /* `row`: el is an item of such a row (blockified, but side by side with the others) */
     function element(el, pre, row) {
       var tag = el.tagName.toUpperCase();
       if (tag === "BR") { put("\n"); return; }
+      if (tag === "INPUT" && /^(text|number|search)$/.test(el.type)) { box(el); return; }
       if (SKIP[tag] || el === host) return;
       var cs = getComputedStyle(el);
       if (!rendered(el, cs)) return;
@@ -180,10 +239,13 @@
         if (el.previousElementSibling) { out = out.replace(/ +$/, ""); put(" | "); }
       } else if (block) {
         br();
-        if (tag === "LI") put(listMark(el, cs));
+        if (tag === "LI") put(listMark(el, cs) || codeLine(el, cs));
       }
       walk(el, p, d === "contents" ? row : isRow(el, cs));
+      if (tag === "BUTTON") note(answerMark(el));
       if (row && isKey(el)) put(".");
+      /* a label set off by its margin, not by a space ("Trap" before a callout's text) */
+      if (!block && !cell && !row && /^inline/.test(d) && parseFloat(cs.marginRight) >= 4) space();
       if (block) br();
     }
     function walk(node, pre, row) {
@@ -203,7 +265,7 @@
 
     var f = formulaRoot(root);
     if (f) math(f);
-    else {
+    else if (!root.closest("svg, canvas")) {   /* inside a figure: its labels aren't text of the page */
       var cs = getComputedStyle(root);
       walk(root, /^(pre|break-spaces)/.test(cs.whiteSpace), isRow(root, cs));
     }
@@ -243,9 +305,10 @@
     }
     return used.length ? "Macros used above (defined by this page): " + used.join("; ") : "";
   }
-  /* `text` with that line at its end, within `limit` */
-  function withMacros(text, limit) {
-    var line = text ? macroLine(text) : "";
+  /* `text` with that line at its end, within `limit` (`path`: the section path sent with it, whose titles can use
+     macros too) */
+  function withMacros(text, limit, path) {
+    var line = text ? macroLine(path ? path + "\n" + text : text) : "";
     if (!line) return text;
     if (line.length > limit / 4) line = finish(line, Math.floor(limit / 4));
     if (text.length + 2 + line.length > limit) text = finish(text, limit - 2 - line.length);
@@ -258,9 +321,12 @@
     if (!node || !W || typeof W.entryAt !== "function") return null;
     try { return W.entryAt(node); } catch (e) { return null; }
   }
+  /* the path's titles read from their headings the way the text is (math as TeX), else as the index has them */
   function pathText(at) {
-    var p = at && at.path ? at.path.filter(function (t) { return !!t; }) : [];
-    return p.join(" \u203a ");
+    var els = (at && at.titleEls) || [], p = at && at.path ? at.path.map(function (t, i) {
+      return (els[i] && nodeText(els[i], 140).replace(/\s+/g, " ")) || t;
+    }) : [];
+    return p.filter(function (t) { return !!t; }).join(" \u203a ");
   }
   /* a section, or a heading span (its heading up to the next heading of the same or a higher level) */
   function entryRange(at) {
@@ -317,13 +383,19 @@
     return title + rangeText(r, limit - title.length);
   }
 
-  /* the sticky top bar's height (as the indexer measures it when scrolling to a section) */
+  /* The sticky top bar's height (as the indexer measures it when scrolling to a section). Finding the bars scans the
+     whole page (milliseconds on the big ones), so they are kept for two seconds, or until the window is resized. */
+  var bars = null, barsAt = 0;
   function stickyInset() {
-    var inset = 0, q = document.querySelectorAll("nav, header, .topnav, .mm-head, [class*='sticky']");
-    for (var i = 0; i < q.length; i++) {
-      var cs = getComputedStyle(q[i]);
+    var inset = 0, now = Date.now();
+    if (!bars || now - barsAt > 2000) {
+      bars = document.querySelectorAll("nav, header, .topnav, .mm-head, [class*='sticky']");
+      barsAt = now;
+    }
+    for (var i = 0; i < bars.length; i++) {
+      var cs = getComputedStyle(bars[i]);
       if (cs.position !== "sticky" && cs.position !== "fixed") continue;
-      var r = q[i].getBoundingClientRect();
+      var r = bars[i].getBoundingClientRect();
       if (r.height > window.innerHeight * 0.4 || r.width < window.innerWidth * 0.5 || r.bottom <= 0) continue;
       inset = Math.max(inset, (parseFloat(cs.top) || 0) + r.height);
     }
@@ -369,12 +441,12 @@
     return false;
   }
   /* a non-empty selection of the page (not inside a text field), or null. It counts by what it quotes: a formula
-     alone has no text to toString() (MathJax draws SVG, and its copy for screen readers can't be selected). */
+     alone has no text to toString() (MathJax draws SVG, and its copy for screen readers can't be selected), and the
+     labels a drag that misses a demo's handle selects are part of a figure. */
   function pageSelection() {
     var sel = window.getSelection();
     if (!sel || !sel.rangeCount || sel.isCollapsed || inField(sel)) return null;
-    if (!sel.toString().trim() && !rangeText(sel.getRangeAt(0), 100)) return null;
-    return sel;
+    return rangeText(sel.getRangeAt(0), 100) ? sel : null;
   }
   function startNode(r) {
     var n = r.startContainer;
@@ -406,9 +478,9 @@
     if (!sel) return null;
     var range = tidy(sel.getRangeAt(0));
     if (seen && !onScreen(range)) return null;
-    var text = rangeText(range, MAX_SELECTION) || finish(sel.toString(), MAX_SELECTION);
+    var text = rangeText(range, MAX_SELECTION);
     if (!text) return null;
-    var p = { kind: "selection", text: withMacros(text, MAX_SELECTION) }, path = pathText(entryAt(startNode(range)));
+    var path = pathText(entryAt(startNode(range))), p = { kind: "selection", text: withMacros(text, MAX_SELECTION, path) };
     if (path) p.section = path;
     return p;
   }
@@ -417,10 +489,10 @@
     if (opts && opts.hide) dismiss();
     var p = selectionPayload(true);
     if (p) return p;
-    var at = readingEntry(), text = at ? withMacros(sectionText(at, MAX_SECTION), MAX_SECTION) : "";
+    var at = readingEntry(), path = pathText(at);
+    var text = at ? withMacros(sectionText(at, MAX_SECTION), MAX_SECTION, path) : "";
     if (!text) return null;
     p = { kind: "section", text: text };
-    var path = pathText(at);
     if (path) p.section = path;
     return p;
   }
@@ -579,8 +651,18 @@
   document.addEventListener("keydown", function (e) { if (shown && e.key === "Escape") dismiss(); }, true);
   /* any change of the selection ends a dismissal (selecting the same words again is a new selection) */
   document.addEventListener("selectionchange", function () { dismissed = null; if (shown) place(); });
-  window.addEventListener("scroll", function () { if (shown) place(); }, { capture: true, passive: true });
-  window.addEventListener("resize", function () { if (shown) place(); }, { passive: true });
+  /* The page moving under the button (scrolling, resizing) hides it until the page has been still for 120 ms, then
+     places it once: place() looks for controls under it with hit tests, too slow for every scroll event of a big
+     page, and a fixed button moved along with scrolling trails its line. */
+  var settling = 0;
+  function moved() {
+    if (!shown) return;
+    host.style.setProperty("visibility", "hidden", "important");
+    clearTimeout(settling);
+    settling = setTimeout(place, 120);
+  }
+  window.addEventListener("scroll", moved, { capture: true, passive: true });
+  window.addEventListener("resize", function () { bars = null; moved(); }, { passive: true });
 
   /* ---------------- area selection in the app ---------------- */
   function crosshair(on) {
