@@ -40,12 +40,14 @@
     <button class="chip" data-action="explain">Explain this slide</button>
     <button class="chip" data-action="visualize">Visualize this slide</button>
     <button class="chip ghostchip" id="btn-area" title="Drag a box over part of the slide (or hold ⌥ and drag on the slide; ⌘⇧A)">✂︎ Select area</button>
+    <button class="chip ghostchip" id="btn-attach" title="Attach screenshots or other pictures (or paste one with ⌘V, or drop files on the chat)">📎 Screenshot</button>
   </div>
   <div id="areabox" hidden>
     <img id="area-img" alt="">
     <span id="area-label"></span>
     <button id="area-clear" class="ghost" title="Remove the selected area">✕</button>
   </div>
+  <div id="attachbox" hidden></div>
   <div id="inputwrap">
     <textarea id="input" rows="2" placeholder="Ask about this slide…  (Enter to send, Shift+Enter for a new line)"></textarea>
   </div>
@@ -59,6 +61,7 @@
     <span class="grow"></span>
     <button id="btn-send" class="primary">Send</button>
   </div>
+  <div id="note" role="status" aria-live="polite"></div>
   <div id="status">
     <span id="attach" title="The current slide image and text are sent with your first question on this slide"></span>
     <span class="grow"></span>
@@ -77,6 +80,7 @@
     <div id="search-results" aria-label="Search results"></div>
   </section>
 </div>
+<div id="drop-layer" hidden><span id="drop-text">Drop screenshots or pictures to attach</span></div>
 <script src="chat.js"></script>
 </body>
 </html>
