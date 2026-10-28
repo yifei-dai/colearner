@@ -35,7 +35,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         config.userContentController.add(WeakScriptHandler(self), name: "cl")
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        webView = WKWebView(frame: .zero, configuration: config)
+        let chatView = ChatWebView(frame: .zero, configuration: config)
+        webView = chatView
+        chatView.pastePictures = { [weak self] in self?.pasteForChat() ?? false }
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         let web = AppPaths.web
@@ -400,8 +402,15 @@ final class ChatController: NSObject, WKNavigationDelegate {
         }
     }
 
+    /// Paste in the chat page (⌘V, Edit › Paste): a picture on the clipboard goes into the chat box; anything else
+    /// (text, or the Search box open) is the page's to paste.
+    private func pasteForChat() -> Bool {
+        !searchOpen && pasteImages()
+    }
+
     /// Attaches the images on `pb` (a copied screenshot, image files copied in Finder). False if there are none, so
-    /// the paste can go on as text.
+    /// the paste can go on as text. Only call it for a paste the user made (a paste action, a drop): macOS asks before
+    /// letting an app read the clipboard any other time.
     @discardableResult
     func pasteImages(from pb: NSPasteboard = .general) -> Bool {
         guard model.deck != nil else { return false }
@@ -532,10 +541,6 @@ final class ChatController: NSObject, WKNavigationDelegate {
             model.beginAreaSelection()
         case "clearArea":
             clearArea()
-        case "pasteImages":
-            // A paste the page saw carrying files or image data (⌘V itself is caught before the page, in AppModel).
-            // Nothing to attach: paste the text instead.
-            if !pasteImages(), let t = NSPasteboard.general.string(forType: .string), !t.isEmpty { js("pasteText", t) }
         case "attachImageData":
             // A picture dropped on the chat, read by the page as a data URL.
             guard model.deck != nil, let s = body["data"] as? String, s.hasPrefix("data:"), let comma = s.firstIndex(of: ",") else { return }
@@ -969,6 +974,28 @@ final class ChatController: NSObject, WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         ready = false
         webView.reload()
+    }
+}
+
+/// The chat page's web view. Paste (⌘V, Edit › Paste) with a picture on the clipboard attaches the picture instead of
+/// handing the paste to the page; anything else pastes as usual. macOS lets an app read the clipboard without asking only
+/// inside such a paste, so this is where the reading happens.
+final class ChatWebView: WKWebView {
+    var pastePictures: () -> Bool = { false }
+    private static let pasteAction = #selector(NSText.paste(_:))
+
+    @objc func paste(_ sender: Any?) {
+        if pastePictures() { return }
+        // WebKit's own paste (WKWebView implements paste: without declaring it).
+        typealias Paste = @convention(c) (AnyObject, Selector, Any?) -> Void
+        guard WKWebView.instancesRespond(to: Self.pasteAction),
+              let imp = class_getMethodImplementation(WKWebView.self, Self.pasteAction) else { return }
+        unsafeBitCast(imp, to: Paste.self)(self, Self.pasteAction, sender)
+    }
+
+    /// A picture can be pasted with no text box in focus, so Paste stays available.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        item.action == Self.pasteAction || super.validateUserInterfaceItem(item)
     }
 }
 

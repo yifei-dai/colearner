@@ -206,22 +206,6 @@ final class AppModel: ObservableObject {
                 self.selectingWalkthroughArea = false
                 return nil
             }
-            // ⌘V with a screenshot or picture on the clipboard attaches it to the chat, from the chat page or with
-            // the slides in focus. Text fields and study pages paste as usual, and so does text on the clipboard.
-            if let self, e.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
-               e.charactersIgnoringModifiers?.lowercased() == "v", self.deck != nil, NSApp.modalWindow == nil,
-               let w = e.window, w === (self.mainWindow ?? w) || self.popOuts.contains(w), !(w is NSPanel) {
-                let fr = w.firstResponder as? NSView
-                let inChat = fr.map { $0 === self.chat.webView || $0.isDescendant(of: self.chat.webView) } ?? false
-                let inOtherPage = !inChat && (fr.map { $0 is WKWebView || $0.enclosingWebView != nil } ?? false)
-                if !(w.firstResponder is NSText), !inOtherPage, !(inChat && self.chat.searchOpen), self.chat.pasteImages() {
-                    if !inChat {
-                        self.showPanel(.chat)
-                        DispatchQueue.main.async { self.chat.focusInput() }
-                    }
-                    return nil
-                }
-            }
             guard let self, e.keyCode == 123 || e.keyCode == 124,
                   e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
                   self.document != nil, let w = e.window, !(w is NSPanel) else { return e }

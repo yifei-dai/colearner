@@ -87,6 +87,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// Paste (⌘V, Edit › Paste) that nothing in focus takes (the slides, the thumbnails, a notes PDF): a picture on the
+    /// clipboard goes to the chat. Text boxes, the chat page and study pages handle their own paste first.
+    @objc func paste(_ sender: Any?) {
+        MainActor.assumeIsolated {
+            guard let model, let w = NSApp.keyWindow, w === model.mainWindow || model.popOuts.contains(w),
+                  model.chat.pasteImages() else { NSSound.beep(); return }
+            model.showPanel(.chat)
+            DispatchQueue.main.async { model.chat.focusInput() }
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             model?.chat.stopAll()

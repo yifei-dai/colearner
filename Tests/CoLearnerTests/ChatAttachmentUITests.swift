@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 import Testing
+import WebKit
+@testable import CoLearner
 
 /// Screenshots and walkthrough quotes in the shipped chat page: the composer, the status line, quick buttons, paste,
 /// drop and the question bubbles. The app side is played by the test (setThread / setAttachments and the posts).
@@ -440,80 +442,50 @@ struct ChatAttachmentUITests {
 
     // MARK: paste and drop
 
-    @Test func pastedPictureGoesToTheAppWhileTextPastesNormally() async throws {
+    @Test func aPasteReachingThePageReadsItsOwnPicturesWhileTextPastesNormally() async throws {
         let web = ChatWebFixture()
         defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
         try await web.load()
         // Returns whether the page took the paste over.
-        func paste(file: Bool, text: String? = nil) async throws -> Bool {
+        func paste(file: String? = nil, text: String? = nil, into target: String = "#input") async throws -> Bool {
             try await flag("""
                 (() => {
                   const dt = new DataTransfer();
-                  \(file ? "dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'image.png', {type: 'image/png'}));" : "")
+                  \(file.map { "dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], \(json($0)), {type: 'image/png'}));" } ?? "")
                   \(text.map { "dt.setData('text/plain', \(json($0)));" } ?? "")
                   const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
-                  document.querySelector('#input').dispatchEvent(ev);
+                  document.querySelector(\(json(target))).dispatchEvent(ev);
                   return ev.defaultPrevented;
                 })()
                 """, in: web)
         }
-        #expect(try await paste(file: true) == false)   // no deck open: nothing to attach to
+        #expect(try await paste(file: "image.png") == false)   // no deck open: nothing to attach to
         try await web.call("setThread", thread())
         web.clearMessages()
-        #expect(try await paste(file: true))
-        _ = try await web.waitForMessage(type: "pasteImages")
-        #expect(posts("pasteImages", in: web).first?.count == 1)
-
+        // A copied picture (WebKit names it image.png) is read here and goes to the app as a "Pasted image".
+        #expect(try await paste(file: "image.png"))
+        let pasted = try await waitForPosts("attachImageData", count: 1, in: web)
+        #expect(pasted.first?["name"] as? String == "Pasted image")
+        #expect((pasted.first?["data"] as? String)?.hasPrefix("data:image/png;base64,") == true)
+        // A copied file keeps its name.
         web.clearMessages()
-        #expect(try await paste(file: false, text: "R = Rot(z, θ)") == false)
-        #expect(try await paste(file: true, text: "copied text with a picture") == false)   // text wins, as in the app
-        #expect(try await paste(file: true, text: "   ") == true)
+        #expect(try await paste(file: "Screenshot 2026-10-28 at 2.31.05 PM.png"))
+        #expect(try await waitForPosts("attachImageData", count: 1, in: web).first?["name"] as? String
+                == "Screenshot 2026-10-28 at 2.31.05 PM.png")
+        // Text pastes as usual, also text that comes with a picture; a blank text doesn't count.
+        web.clearMessages()
+        #expect(try await paste(text: "R = Rot(z, θ)") == false)
+        #expect(try await paste(file: "image.png", text: "copied text with a picture") == false)
+        #expect(try await paste(file: "image.png", text: "   ") == true)
+        _ = try await waitForPosts("attachImageData", count: 1, in: web)
         try await Task.sleep(for: .milliseconds(50))
-        #expect(posts("pasteImages", in: web).count == 1)
-
+        #expect(posts("attachImageData", in: web).count == 1)
         // The search box pastes as usual.
         try await web.call("openSearch", NSNull())
         web.clearMessages()
-        #expect(try await flag("""
-            (() => {
-              const dt = new DataTransfer();
-              dt.items.add(new File([new Uint8Array([1])], 'image.png', {type: 'image/png'}));
-              const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
-              document.querySelector('#search-input').dispatchEvent(ev);
-              return !ev.defaultPrevented;
-            })()
-            """, in: web))
+        #expect(try await paste(file: "image.png", into: "#search-input") == false)
         try await Task.sleep(for: .milliseconds(50))
-        #expect(posts("pasteImages", in: web).isEmpty)
-    }
-
-    @Test func pasteTextInsertsAtTheCaret() async throws {
-        let web = ChatWebFixture()
-        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
-        try await web.load()
-        try await web.call("setThread", thread())
-        _ = try await web.evaluate("const i = document.querySelector('#input'); i.value = 'Hello world'; i.setSelectionRange(6, 11); i.blur(); null;")
-        try await web.call("pasteText", "there")
-        #expect(try await web.evaluate("document.querySelector('#input').value") as? String == "Hello there")
-        #expect(try await web.evaluate("document.querySelector('#input').selectionStart") as? Int == 11)
-        #expect(try await web.evaluate("document.activeElement.id") as? String == "input")
-
-        _ = try await web.evaluate("const j = document.querySelector('#input'); j.value = 'ab'; j.setSelectionRange(1, 1); null;")
-        try await web.call("pasteText", "X")
-        #expect(try await web.evaluate("document.querySelector('#input').value") as? String == "aXb")
-
-        let before = try await web.evaluate("document.querySelector('#input').getBoundingClientRect().height") as? Double ?? 0
-        try await web.call("pasteText", String(repeating: "a longer pasted line\n", count: 6))
-        #expect((try await web.evaluate("document.querySelector('#input').getBoundingClientRect().height") as? Double ?? 0) > before)
-        try await web.call("pasteText", 42)
-        #expect((try await web.evaluate("document.querySelector('#input').value") as? String)?.hasPrefix("aXa longer pasted line\n") == true)
-
-        // A box that can't take focus (the search dialog opened meanwhile) still gets the text at its caret.
-        _ = try await web.evaluate("const k = document.querySelector('#input'); k.value = 'one three'; k.setSelectionRange(4, 4); null;")
-        try await web.call("openSearch", NSNull())
-        try await web.call("pasteText", "two ")
-        #expect(try await web.evaluate("document.querySelector('#input').value") as? String == "one two three")
-        #expect(try await web.evaluate("document.activeElement.id") as? String == "search-input")
+        #expect(posts("attachImageData", in: web).isEmpty)
     }
 
     @Test func droppedPicturesAreReadInOrderAndOtherFilesAreSkipped() async throws {
@@ -717,5 +689,22 @@ struct ChatAttachmentUITests {
                 try await web.snapshot(to: URL(fileURLWithPath: "/tmp/colearner-v019-attachments.png"))
             }
         }
+    }
+}
+
+/// The chat's web view takes ⌘V / Edit › Paste for pictures itself (the only place macOS lets an app read the clipboard
+/// without asking). These tests never touch the clipboard: the picture check is a stand-in.
+@Suite(.serialized)
+@MainActor
+struct ChatPasteTests {
+    @Test func pasteGoesToThePicturesFirstAndPasteStaysAvailable() {
+        let view = ChatWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        var asked = 0
+        view.pastePictures = { asked += 1; return true }
+        view.paste(nil)
+        #expect(asked == 1)   // a picture was taken: WebKit's paste (which would read the clipboard) never ran
+        let item = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        #expect(view.validateUserInterfaceItem(item))
+        #expect(WKWebView.instancesRespond(to: #selector(NSText.paste(_:))))   // the paste it hands text to
     }
 }

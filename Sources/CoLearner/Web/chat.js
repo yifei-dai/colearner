@@ -1039,18 +1039,6 @@
       renderHeader();
     },
     showNote,
-    /// The clipboard's text, for a paste the page handed to the app that held no picture after all.
-    pasteText(t) {
-      if (typeof t !== "string" || !t) return;
-      input.focus();
-      // insertText keeps the paste undoable; setRangeText also works when the box can't take focus.
-      let done = false;
-      if (document.activeElement === input) {
-        try { done = document.execCommand("insertText", false, t); } catch (e) { done = false; }
-      }
-      if (!done) input.setRangeText(t, input.selectionStart, input.selectionEnd, "end");
-      autoGrow();
-    },
     setProvider(p) {
       state.provider = p;
       renderHeader();
@@ -1170,14 +1158,16 @@
     noteTimer = setTimeout(() => { box.textContent = ""; box.classList.remove("error"); }, 5000);
   }
 
-  // Edit › Paste or the context menu with a picture on the clipboard (⌘V itself is caught by the app first): the app
-  // reads the clipboard and attaches the picture, or hands its text back through CL.pasteText.
+  // A paste that reaches the page with pictures on it (the context menu's Paste; ⌘V and Edit › Paste with a picture
+  // are taken by the app first): the pictures are read here, like dropped ones. Text pastes as usual.
   document.addEventListener("paste", (e) => {
     const cd = e.clipboardData;
     if (!cd || !state.hasDeck || searchState.open) return;
     if (!Array.from(cd.types || []).includes("Files") || (cd.getData("text/plain") || "").trim()) return;
+    const files = Array.from(cd.files || []);
+    if (!files.length) return;
     e.preventDefault();
-    post({ type: "pasteImages" });
+    addPictures(files, "pasted");
   }, true);
 
   // ---------- dropping pictures on the chat ----------
@@ -1231,6 +1221,10 @@
     const files = Array.from(dt.files || []);
     // Files promised by the app they come from (a browser, Photos) can't be read here: the app reads the drag.
     if (!files.length) { post({ type: "dropImages" }); return; }
+    addPictures(files, false);
+  }
+  /// Dropped or pasted files: the pictures are read (as many as one question still takes), the rest skipped with a note.
+  function addPictures(files, pasted) {
     const pictures = [], skipped = [], large = [];
     for (const f of files) {
       const name = String(f.name || "");
@@ -1244,23 +1238,26 @@
     if (large.length) notes.push(fileNames(large) + (large.length === 1 ? " is" : " are") + " too large to attach.");
     if (pictures.length > room) notes.push("At most " + MAX_PICTURES + " pictures go with one question.");
     if (notes.length) showNote({ text: notes.join(" "), error: true });
-    readPictures(pictures.slice(0, room));
+    readPictures(pictures.slice(0, room), pasted);
   }
-  // One file at a time, in the order dropped; the app decodes and scales each.
-  function readPictures(files) {
+  // One file at a time, in order; the app decodes and scales each. A copied picture has no name of its own
+  // (WebKit calls it image.png), so it is a "Pasted image".
+  function readPictures(files, pasted) {
     const f = files.shift();
     if (!f) return;
+    const name = pasted && /^image\.\w+$/i.test(f.name || "image.png") ? "Pasted image" : f.name;
     const r = new FileReader();
     r.onload = () => {
-      if (typeof r.result === "string" && r.result.startsWith("data:")) post({ type: "attachImageData", name: f.name, data: r.result });
-      readPictures(files);
+      if (typeof r.result === "string" && r.result.startsWith("data:")) post({ type: "attachImageData", name, data: r.result });
+      readPictures(files, pasted);
     };
     r.onerror = () => {
-      showNote({ text: "Couldn’t read “" + f.name + "”.", error: true });
-      readPictures(files);
+      showNote({ text: "Couldn’t read “" + name + "”.", error: true });
+      readPictures(files, pasted);
     };
     r.readAsDataURL(f);
   }
+
   // ---------- Reply: ask about part of an answer ----------
   // Select part of a finished answer and a Reply button appears by it; the part goes into the chat box as a quote
   // (formulas as their TeX) for the next question.
