@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 @testable import CoLearner
 
 /// Pictures for the chat: decoding and scaling, what a paste attaches (private pasteboards only, never the clipboard),
-/// how the prompt names them, and how they are saved with a question.
+/// how the prompt names them, how they are saved with a question, and how they come back when no answer does.
 @Suite(.serialized)
 @MainActor
 struct AttachmentTests {
@@ -235,20 +235,47 @@ struct AttachmentTests {
         #expect(notes.contains("<notes_excerpt from=\"L03_notes\" where=\"page 7\">\nDH table\n</notes_excerpt>"))
     }
 
+    @Test func pageNumbersAskedWithTheNotesAreNotSlides() {
+        // About the slides, "p. 12" and "page 7" are slides too.
+        #expect(DeckContext.referencedSlides(in: "What does p. 12 say?", pageCount: 30) == [12])
+        #expect(DeckContext.referencedSlides(in: "Explain page 7", pageCount: 30) == [7])
+        #expect(DeckContext.referencedSlides(in: "How does slide 5 follow?", pageCount: 30) == [5])
+        #expect(DeckContext.referencedSlides(in: "Notes p. 12 vs slides 2, 4 and 9", pageCount: 30) == [12, 2, 4, 9])
+        // Asked with a notes quote or picture, they are pages of the notes: only "slide(s) N" are slides.
+        #expect(DeckContext.referencedSlides(in: "What does p. 12 say?", pageCount: 30, slidesOnly: true).isEmpty)
+        #expect(DeckContext.referencedSlides(in: "Explain page 7", pageCount: 30, slidesOnly: true).isEmpty)
+        #expect(DeckContext.referencedSlides(in: "How does slide 5 follow?", pageCount: 30, slidesOnly: true) == [5])
+        #expect(DeckContext.referencedSlides(in: "Notes p. 12 vs slides 2, 4 and 9", pageCount: 30, slidesOnly: true) == [2, 4, 9])
+    }
+
+    @Test func tutorRulesForWhatThisMeansAndForDisagreements() {
+        // "This slide" stays the slide on screen; what is attached is "this".
+        #expect(Prompts.tutor.contains("- \"This slide\" is the slide the student is on. \"This\" and \"here\" mean what the student "
+            + "attached (a selected area, a picture or a quoted passage) when there is one, and otherwise that slide. Answer "
+            + "about it unless the student asks about other slides;"))
+        // A study page's checked errata or a correction made in class can be right where the slide is wrong.
+        #expect(Prompts.tutor.contains("- If a quoted passage disagrees with the slides, say so and work out which is right: "
+            + "study pages list checked slide errata and the notes record corrections made in class. Otherwise treat the "
+            + "slides as the reference.\n"))
+        #expect(!Prompts.tutor.contains("the slides are authoritative"))
+    }
+
     @Test func transcriptTellsTheOtherAssistantWhatWentWithAQuestion() {
         var asked = ChatMessage(role: .user, text: "Why is this orthogonal?", page: 4)
-        asked.images = [MessageImage(label: "a.png", thumb: "data:image/jpeg;base64,AA=="),
-                        MessageImage(label: "b.png", thumb: "data:image/jpeg;base64,AA==")]
+        asked.images = [MessageImage(label: "Notes p. 7", thumb: "data:image/jpeg;base64,AA=="),
+                        MessageImage(label: "Walkthrough area", thumb: "data:image/jpeg;base64,AA==")]
         asked.quote = ChatQuote(source: "Frames Walkthrough", section: "Topic 2", text: String(repeating: "q", count: 1600))
         var area = ChatMessage(role: .user, text: "And this?", page: 5)
         area.areaThumb = "data:image/jpeg;base64,AA=="
         area.images = [MessageImage(label: "c.png", thumb: "x")]
         let answer = ChatMessage(role: .assistant, provider: .claude, text: "Because R^T R = I.", page: 4)
         let s = ChatController.transcript([asked, area, answer], tag: "t", you: .codex)
-        #expect(s.contains("[Student, slide 4]: Why is this orthogonal? [2 images the student attached went with this; not included here]"))
+        // Which pictures it missed, by the names the chat showed.
+        #expect(s.contains("[Student, slide 4]: Why is this orthogonal? [2 images the student attached went with this, not included here: "
+                           + "“Notes p. 7”, “Walkthrough area”]"))
         #expect(s.contains("\n(With this passage quoted from Frames Walkthrough › Topic 2: " + String(repeating: "q", count: 1500) + " …)"))
         #expect(s.contains("[Student, slide 5]: And this? [asked about an area of the slide that the student selected] "
-                           + "[an image the student attached went with this; not included here]"))
+                           + "[an image the student attached went with this, not included here: “c.png”]"))
         #expect(s.contains("[Claude, slide 4]: Because R^T R = I.\n"))
         #expect(!s.contains("data:image"))
     }
@@ -290,5 +317,62 @@ struct AttachmentTests {
         let m = try #require(ChatStore(directory: dir).current("old.pdf").messages.first)
         #expect(m.text == "Explain this slide" && m.areaThumb != nil)
         #expect(m.images == nil && m.quote == nil)
+    }
+
+    // MARK: a question nobody answered
+
+    private func asked(_ images: [PendingImage] = [], runs: Set<String>) -> ChatController.AskedWith {
+        ChatController.AskedWith(images: images, quote: nil, deck: "deck.pdf", conversation: "c1", quoteConversation: nil, runs: runs)
+    }
+
+    /// A picture in the chat box, with (or without) its file in `dir`.
+    private func picture(_ label: String, in dir: URL, cached: Bool = true) throws -> PendingImage {
+        let url = dir.appendingPathComponent(label + ".png")
+        if cached { try Data("x".utf8).write(to: url) }
+        return PendingImage(url: url, thumb: "data:image/jpeg;base64,AA==", label: label, detail: "an image the student pasted")
+    }
+
+    @Test func picturesComeBackOnlyWhenNoAnswerDoes() {
+        // Any answer text counts, unless the run failed.
+        var done = asked(runs: ["a"])
+        #expect(done.ended("a", status: .done, text: "Because…") == .forget)
+        var stoppedLate = asked(runs: ["a"])
+        #expect(stoppedLate.ended("a", status: .stopped, text: "The first half") == .forget)
+        var stoppedEarly = asked(runs: ["a"])
+        #expect(stoppedEarly.ended("a", status: .stopped, text: "") == .giveBack)
+        var failed = asked(runs: ["a"])
+        #expect(failed.ended("a", status: .error, text: "Cut off mid") == .giveBack)
+        // Asked of both: they wait for the other answer.
+        var both = asked(runs: ["a", "b"])
+        #expect(both.ended("a", status: .error, text: "") == .wait)
+        #expect(both.ended("a", status: .error, text: "") == .wait, "an end reported twice counts once")
+        #expect(both.ended("b", status: .stopped, text: "") == .giveBack)
+        var oneAnswered = asked(runs: ["a", "b"])
+        #expect(oneAnswered.ended("a", status: .error, text: "") == .wait)
+        #expect(oneAnswered.ended("b", status: .done, text: "Answer") == .forget)
+    }
+
+    @Test func picturesGoBackInFrontOfTheChatBox() throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let typed = try picture("typed", in: dir)
+        let sent = asked([try picture("a", in: dir), try picture("gone", in: dir, cached: false), try picture("b", in: dir), typed],
+                         runs: [])
+        // In front of what the box holds now; one already there and one no longer in the cache are left out.
+        #expect(sent.pictures(before: [typed], inFlight: 0).map(\.label) == ["a", "b", "typed"])
+        // Only as many as fit (8 to a question, counting those still being prepared).
+        let six = try (1...6).map { try picture("p\($0)", in: dir) }
+        #expect(sent.pictures(before: six, inFlight: 1).map(\.label) == ["a"] + six.map(\.label))
+        #expect(sent.pictures(before: six + [typed], inFlight: 1).map(\.label) == six.map(\.label) + ["typed"])
+
+        #expect(ChatController.AskedWith.backNote(pictures: 0, quote: false) == nil)
+        #expect(ChatController.AskedWith.backNote(pictures: 1, quote: false)
+                == "The picture from the unanswered question is back in the chat box.")
+        #expect(ChatController.AskedWith.backNote(pictures: 3, quote: false)
+                == "The pictures from the unanswered question are back in the chat box.")
+        #expect(ChatController.AskedWith.backNote(pictures: 0, quote: true)
+                == "The quoted passage from the unanswered question is back in the chat box.")
+        #expect(ChatController.AskedWith.backNote(pictures: 1, quote: true)
+                == "The picture and the quoted passage from the unanswered question are back in the chat box.")
     }
 }

@@ -46,13 +46,21 @@ final class StudyPDFController: ObservableObject {
 
     // MARK: asking about the notes
 
-    /// The text selected in the notes, as a quote for the chat ("page N": where the selection starts).
+    /// The text selected in the notes, as a quote for the chat ("page N": where the selection starts). Only while some
+    /// of it is on screen: one the notes moved away from (Follow slides, scrolling) is not what the student is looking at.
     func selectionQuote() -> ChatQuote? {
-        guard let title, let doc = view.document, let sel = view.currentSelection,
+        guard let title, let doc = view.document, let sel = view.currentSelection, isOnScreen(sel),
               let text = sel.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
         let index = sel.pages.first.map { doc.index(for: $0) } ?? NSNotFound
         return ChatQuote(source: title, section: index == NSNotFound ? nil : "page \(index + 1)",
                          text: String(text.prefix(ChatQuote.maxText)), kind: "notes")
+    }
+
+    /// Part of `sel` is inside the view. (visiblePages is empty while the window is off screen.) A view with no size
+    /// yet shows only its current page.
+    private func isOnScreen(_ sel: PDFSelection) -> Bool {
+        guard !view.bounds.isEmpty else { return sel.pages.contains { $0 === view.currentPage } }
+        return sel.pages.contains { view.convert(sel.bounds(for: $0), from: $0).intersects(view.bounds) }
     }
 
     /// The notes page on screen as a picture (at the size Claude reads), with its page number.

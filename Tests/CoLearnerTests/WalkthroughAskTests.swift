@@ -520,7 +520,15 @@ struct WalkthroughAskTests {
         #expect(shot.page == 1)
         #expect(max(shot.image.width, shot.image.height) == Int(SlideImages.longEdge))
 
-        let second = try #require(doc.page(at: 1))
+        let first = try #require(doc.page(at: 0)), second = try #require(doc.page(at: 1))
+        // Before the view has a size, only a selection on the page it shows (the first) counts.
+        viewer.view.setCurrentSelection(first.selection(for: first.bounds(for: .cropBox)), animate: false)
+        #expect(viewer.selectionQuote()?.section == "page 1")
+        viewer.view.setCurrentSelection(second.selection(for: second.bounds(for: .cropBox)), animate: false)
+        #expect(viewer.selectionQuote() == nil)
+        // A selection on the page on screen.
+        viewer.view.frame = NSRect(x: 0, y: 0, width: 600, height: 800)
+        viewer.view.go(to: second)
         viewer.view.setCurrentSelection(second.selection(for: second.bounds(for: .cropBox)), animate: false)
         let quote = try #require(viewer.selectionQuote())
         #expect(quote.kind == "notes" && quote.source == "L09 notes" && quote.section == "page 2")

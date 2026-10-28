@@ -165,8 +165,15 @@ struct ChatReplyTests {
                 + "<answer_excerpt from=\"Claude’s answer\" where=\"slide 5\">\nR^{-1} = R^T\n</answer_excerpt>\n")
         #expect(DeckContext.excerpt(q, for: .codex).hasPrefix("The student selected this part of Claude’s earlier answer in this chat:\n"))
         #expect(DeckContext.excerpt(q).hasPrefix("The student selected this part of Claude’s earlier answer in this chat:\n"))
+        // Asked in another chat (New chat or History since the Reply): the answer is not in this conversation.
+        #expect(DeckContext.excerpt(q, for: .claude, otherChat: true) == "The student selected this part of your answer in an earlier "
+                + "chat about this deck (not part of this conversation):\n"
+                + "<answer_excerpt from=\"Claude’s answer\" where=\"slide 5\">\nR^{-1} = R^T\n</answer_excerpt>\n")
+        #expect(DeckContext.excerpt(q, for: .codex, otherChat: true).hasPrefix("The student selected this part of Claude’s answer in an "
+                + "earlier chat about this deck (not part of this conversation):\n"))
         // Old quote kinds read as before.
         let walk = ChatQuote(source: "Walkthrough", section: nil, text: "t", kind: "selection")
         #expect(DeckContext.excerpt(walk, for: .claude) == DeckContext.excerpt(walk))
+        #expect(DeckContext.excerpt(walk, for: .claude, otherChat: true) == DeckContext.excerpt(walk))
     }
 }

@@ -343,6 +343,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
     /// Text quoted from the open deck's walkthrough or notes; another deck coming up drops it.
     private(set) var pendingQuote: ChatQuote?
     private var quoteDeck: String?
+    /// The chat a quoted answer (Reply) came from. The quote stays through New chat and History; a question asked in
+    /// another chat is told the answer isn't part of it.
+    private var quoteConversation: String?
     /// Decoding and scaling run here, in order, off the main thread.
     private let imageQueue = DispatchQueue(label: "Co-learner.images", qos: .userInitiated)
     private var imagesInFlight = 0
@@ -388,9 +391,13 @@ final class ChatController: NSObject, WKNavigationDelegate {
         attach("Couldn’t read “\(label)” as an image.") { ImageAttachments.make(data: data, label: label, detail: detail) }
     }
 
-    /// A picture made in the app: a snapshot of part of the walkthrough, a rendered notes page.
-    func addImage(cgImage: CGImage, label: String, detail: String) {
-        attach("Couldn’t attach “\(label)”.") { ImageAttachments.make(image: cgImage, label: label, detail: detail) }
+    /// A picture made in the app: a snapshot of part of the walkthrough, a rendered notes page (`fromNotes`).
+    func addImage(cgImage: CGImage, label: String, detail: String, fromNotes: Bool = false) {
+        attach("Couldn’t attach “\(label)”.") {
+            var image = ImageAttachments.make(image: cgImage, label: label, detail: detail)
+            image?.fromNotes = fromNotes
+            return image
+        }
     }
 
     func addImage(fileURL u: URL) {
@@ -445,14 +452,15 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     /// "Ask" in the Walkthrough tab: the passage goes with the next question about the open deck (replacing an
-    /// earlier one).
-    func setQuote(_ q: ChatQuote) {
+    /// earlier one). `conversation`: for part of an answer, the chat it is in.
+    func setQuote(_ q: ChatQuote, conversation: String? = nil) {
         guard let d = model.deck else { return }
         var q = q
         q.text = String(q.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(ChatQuote.maxText))
         guard !q.text.isEmpty else { return }
         pendingQuote = q
         quoteDeck = d.path
+        quoteConversation = conversation
         pushAttachments()
     }
 
@@ -474,6 +482,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private func dropQuote() {
         pendingQuote = nil
         quoteDeck = nil
+        quoteConversation = nil
     }
 
     func handle(_ body: [String: Any]) {
@@ -563,7 +572,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             guard let d = model.deck, let id = body["messageID"] as? String, let text = body["text"] as? String,
                   let m = store.current(d.path).messages.first(where: { $0.id == id }),
                   let q = Self.replyQuote(text: text, to: m) else { return }
-            setQuote(q)
+            setQuote(q, conversation: store.current(d.path).id)
         case "newChat":
             guard let d = model.deck else { return }
             store.startNew(d.path)
@@ -597,6 +606,48 @@ final class ChatController: NSObject, WKNavigationDelegate {
     // MARK: sending
 
     private var prerendered = Set<String>()
+    /// Question id -> the pictures and quote it took out of the chat box (in memory), until an answer comes back.
+    private var askedWith: [String: AskedWith] = [:]
+
+    /// What a question took out of the chat box. If none of its answers comes back (each failed, or was stopped before
+    /// any text), it goes back in, so the question can be asked again.
+    struct AskedWith {
+        var images: [PendingImage]
+        var quote: ChatQuote?
+        /// Where it was asked (a quote belongs to that deck), and the chat a quoted answer came from.
+        var deck: String
+        var conversation: String
+        var quoteConversation: String?
+        /// Its answers still running.
+        var runs: Set<String>
+
+        enum Next { case wait, forget, giveBack }
+
+        /// One of its answers ended (`status`, `text`). An answer is any text, unless the run failed.
+        mutating func ended(_ run: String, status: ChatMessage.Status, text: String) -> Next {
+            guard runs.remove(run) != nil else { return .wait }
+            if status == .done || status == .stopped && !text.isEmpty { return .forget }
+            return runs.isEmpty ? .giveBack : .wait
+        }
+
+        /// The chat box with the pictures back in front: not ones already there or gone from the cache, and only as
+        /// many as fit next to `pending` and the `inFlight` pictures still being prepared.
+        func pictures(before pending: [PendingImage], inFlight: Int) -> [PendingImage] {
+            let room = max(0, ImageAttachments.maxPending - pending.count - inFlight)
+            let back = images.filter { i in
+                !pending.contains { $0.id == i.id } && FileManager.default.fileExists(atPath: i.url.path)
+            }
+            return Array(back.prefix(room)) + pending
+        }
+
+        /// The note under the chat box for what came back (nil: nothing did).
+        static func backNote(pictures n: Int, quote: Bool) -> String? {
+            let things = [n > 1 ? "pictures" : n == 1 ? "picture" : nil, quote ? "quoted passage" : nil].compactMap { $0 }
+            guard !things.isEmpty else { return nil }
+            let verb = n > 1 || things.count > 1 ? "are" : "is"
+            return "The \(things.joined(separator: " and the ")) from the unanswered question \(verb) back in the chat box."
+        }
+    }
 
     /// A changed PDF or linked file set invalidates both providers' cached context, including history
     /// conversations. Cancel affected active runs before their old file manifest can be used again.
@@ -642,6 +693,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
         // Only what the chat box showed goes (a picture still being read waits for the next question).
         let shots = pendingImages.filter { imageIDs.contains($0.id) }
         let quoteNow = quoteID != nil && pendingQuote?.id == quoteID && quoteDeck == deck.path ? pendingQuote : nil
+        let quoteFrom = quoteNow == nil ? nil : quoteConversation
+        // Part of an answer from another chat (New chat or History since then): not in this conversation.
+        let quoteFromOtherChat = quoteNow?.kind == "reply" && quoteFrom != nil && quoteFrom != convID
 
         var user = ChatMessage(role: .user, text: text, display: display)
         user.page = page
@@ -653,14 +707,20 @@ final class ChatController: NSObject, WKNavigationDelegate {
         store.update(deck.path, convID) { $0.messages.append(user) }
         push(user, deck: deck.path, conv: convID, immediate: true)
         if areaNow != nil { clearArea() }   // an area goes with one question, and so do pictures and a quote
+        // The answers' ids, known before any run starts (a run can fail inside start()).
+        let answerIDs = providers.map { _ in UUID().uuidString }
         if !shots.isEmpty || quoteNow != nil {
             pendingImages.removeAll { p in shots.contains { $0.id == p.id } }
             if quoteNow != nil { dropQuote() }
             pushAttachments()
+            askedWith[user.id] = AskedWith(images: shots, quote: quoteNow, deck: deck.path, conversation: convID,
+                                           quoteConversation: quoteFrom, runs: Set(answerIDs))
         }
 
-        let mentioned = DeckContext.referencedSlides(in: text, pageCount: count)
-        for p in providers {
+        // Asked with the notes, "p. 12" or "page 7" means a page of the notes.
+        let withNotes = quoteNow?.kind == "notes" || shots.contains { $0.fromNotes }
+        let mentioned = DeckContext.referencedSlides(in: text, pageCount: count, slidesOnly: withNotes)
+        for (p, answerID) in zip(providers, answerIDs) {
             let resume = conv.session(for: p)
             let fresh = resume == nil
             let seenSlides = fresh ? [] : Set(conv.seenSlides?[p.rawValue] ?? [])
@@ -682,7 +742,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             }
             if let a = areaNow { images.append(a.url) }
             images += shots.map(\.url)
-            if let q = quoteNow { prompt += DeckContext.excerpt(q, for: p) }
+            if let q = quoteNow { prompt += DeckContext.excerpt(q, for: p, otherChat: quoteFromOtherChat) }
             prompt += DeckContext.questionNote(page: page, count: count, slides: shown, area: areaNow != nil,
                                                images: shots.map(\.detail), quote: quoteNow != nil)
                 + "\n<question>\n\(text)\n</question>"
@@ -696,7 +756,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
                 ss[p.rawValue] = Array(Set(seenSlides).union(shown)).sorted()
                 c.seenSlides = ss
             }
-            var a = ChatMessage(role: .assistant, provider: p, text: "", status: .streaming)
+            var a = ChatMessage(id: answerID, role: .assistant, provider: p, text: "", status: .streaming)
             a.activity = "starting…"
             a.page = page
             let (mid, eff) = p == .claude ? (model.claudeModel, model.claudeEffort) : (model.codexModel, model.codexEffort)
@@ -729,7 +789,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     /// Earlier messages as a quoted block, for an assistant that has not seen them. Pictures are not sent again; the
-    /// assistant is told they were there. A quoted passage is text, so it comes along.
+    /// assistant is told which were there (by their labels). A quoted passage is text, so it comes along.
     static func transcript(_ msgs: [ChatMessage], tag: String, you: Provider? = nil) -> String {
         guard !msgs.isEmpty else { return "" }
         var s = "<\(tag)>\n"
@@ -742,8 +802,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
             var body = m.text.count > 2500 ? String(m.text.prefix(2500)) + " …" : m.text
             if m.role == .user {
                 if m.areaThumb != nil { body += " [asked about an area of the slide that the student selected]" }
-                if let n = m.images?.count, n > 0 {
-                    body += " [\(n == 1 ? "an image" : "\(n) images") the student attached went with this; not included here]"
+                if let images = m.images, !images.isEmpty {
+                    let names = images.map { "“\($0.label)”" }.joined(separator: ", ")
+                    body += " [\(images.count == 1 ? "an image" : "\(images.count) images") the student attached went with this, "
+                        + "not included here: \(names)]"
                 }
                 if let q = m.quote {
                     let clip = q.text.count > 1500 ? String(q.text.prefix(1500)) + " …" : q.text
@@ -827,6 +889,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         }
         if finished || sessionChanged { store.save(deck) }
         if let updated { push(updated, deck: deck, conv: conv, immediate: finished) }
+        if finished, let updated { answerEnded(updated) }
     }
 
     /// A stopped or failed run: the assistant's session may not have taken in this turn, so it hasn't "seen"
@@ -886,7 +949,37 @@ final class ChatController: NSObject, WKNavigationDelegate {
         store.save(w.deck)
         if let m = store.conversation(w.deck, w.conv)?.messages.first(where: { $0.id == id }) {
             push(m, deck: w.deck, conv: w.conv, immediate: true)
+            answerEnded(m)
         }
+    }
+
+    /// An answer's run ended (apply or forceStopped; not on quit). Once every answer to a question failed or was
+    /// stopped before any text, its pictures and quote go back into the chat box, so it can be asked again.
+    private func answerEnded(_ m: ChatMessage) {
+        guard let question = askedWith.first(where: { $0.value.runs.contains(m.id) })?.key,
+              var sent = askedWith.removeValue(forKey: question) else { return }
+        switch sent.ended(m.id, status: m.status, text: m.text) {
+        case .wait: askedWith[question] = sent
+        case .forget: break
+        case .giveBack: giveBack(sent)
+        }
+    }
+
+    /// Puts an unanswered question's pictures in front of the chat box, and its quote if the box has none and its
+    /// deck is open, with a note saying so.
+    private func giveBack(_ sent: AskedWith) {
+        let before = pendingImages.count
+        pendingImages = sent.pictures(before: pendingImages, inFlight: imagesInFlight)
+        var quote = false
+        if let q = sent.quote, pendingQuote == nil, model.deck?.path == sent.deck {
+            pendingQuote = q
+            quoteDeck = sent.deck
+            quoteConversation = sent.quoteConversation
+            quote = true
+        }
+        guard let text = AskedWith.backNote(pictures: pendingImages.count - before, quote: quote) else { return }
+        pushAttachments()
+        note(text, error: false)
     }
 
     private func deleteChat(_ id: String) {
@@ -904,6 +997,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
             runWhere.removeValue(forKey: rid)
             seenBefore.removeValue(forKey: rid)
         }
+        // Its questions' pictures go with it.
+        askedWith = askedWith.filter { $0.value.deck != d.path || $0.value.conversation != id }
         store.delete(d.path, id)
         model.refreshChatPages()
         showCurrent()
@@ -911,6 +1006,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     /// On quit: keep what has streamed so far, mark it stopped, save, and end the CLIs right away.
     func stopAll() {
+        askedWith.removeAll()   // nothing goes back into the chat box on the way out
         // Stop the way the Stop button does (SIGINT), so Claude Code keeps the partial answer in its session;
         // give the CLIs a moment, then end whatever is still running.
         for (id, h) in running { h.cancel(); stopping[id] = h }

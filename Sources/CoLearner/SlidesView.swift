@@ -77,7 +77,8 @@ final class AreaSelectView: NSView {
     var onSelect: (NSRect) -> Void = { _ in }
     /// Shown while waiting for the drag.
     let hint: String
-    /// Gets the scroll wheel while this layer has the mouse (a long walkthrough page still scrolls); nil: as before.
+    /// Its view under the pointer gets the scroll wheel while this layer has the mouse (a long walkthrough page or the
+    /// notes still scroll); nil: as before.
     weak var scrollTarget: NSView?
     private var start: NSPoint?
     private var current: NSPoint?
@@ -98,7 +99,11 @@ final class AreaSelectView: NSView {
     }
 
     override func scrollWheel(with e: NSEvent) {
-        if let t = scrollTarget { t.scrollWheel(with: e) } else { super.scrollWheel(with: e) }
+        guard let t = scrollTarget else { super.scrollWheel(with: e); return }
+        // To the view AppKit would pick without this layer: a PDFView hands a wheel sent to itself up the responder
+        // chain instead of to its own scroll view, so the notes would not move.
+        let hit = t.superview.flatMap { t.hitTest($0.convert(e.locationInWindow, from: nil)) }
+        (hit ?? t).scrollWheel(with: e)
     }
 
     override var isFlipped: Bool { true }

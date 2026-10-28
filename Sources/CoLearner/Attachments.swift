@@ -14,6 +14,8 @@ struct PendingImage: Equatable, Sendable {
     var label: String
     /// How the prompt names it: "an image the student pasted", "a capture of part of the walkthrough page “…”".
     var detail: String
+    /// Made from the typed notes ("Notes p. 7"): a page number in the question is then a page of the notes, not a slide.
+    var fromNotes = false
 }
 
 /// Screenshots and other pictures for the chat: decoded, turned upright, scaled down and written to the cache.

@@ -154,8 +154,9 @@ enum DeckContext {
     }
 
     /// A passage the student quoted from the deck's walkthrough page or notes, or from an earlier answer, put before the
-    /// question. `p` is the assistant being asked (an answer of its own is "your earlier answer").
-    static func excerpt(_ q: ChatQuote, for p: Provider? = nil) -> String {
+    /// question. `p` is the assistant being asked (an answer of its own is "your earlier answer"); `otherChat`: the
+    /// answer is from another chat about the deck (New chat or History since), so this conversation doesn't hold it.
+    static func excerpt(_ q: ChatQuote, for p: Provider? = nil, otherChat: Bool = false) -> String {
         let page = "the walkthrough page for this deck (a study page written from these slides)"
         let tag: String, intro: String
         switch q.kind {
@@ -165,7 +166,9 @@ enum DeckContext {
         case "section": (tag, intro) = ("walkthrough_excerpt", "The student is reading this section of \(page):")
         case "reply":
             let whose = p != nil && q.provider == p ? "your" : (q.provider?.displayName ?? "an assistant") + "’s"
-            (tag, intro) = ("answer_excerpt", "The student selected this part of \(whose) earlier answer in this chat:")
+            (tag, intro) = ("answer_excerpt", otherChat
+                ? "The student selected this part of \(whose) answer in an earlier chat about this deck (not part of this conversation):"
+                : "The student selected this part of \(whose) earlier answer in this chat:")
         default: (tag, intro) = ("walkthrough_excerpt", "The student selected this passage on \(page):")
         }
         func attribute(_ s: String) -> String {
@@ -178,10 +181,12 @@ enum DeckContext {
     }
 
     /// Slide numbers mentioned in a question: "slide 5", "slides 5-8", "p. 3", "pages 3 and 7", "slides 2, 4, and 9",
-    /// "slide #4", "pg 12", "slides 3 through 6".
-    static func referencedSlides(in text: String, pageCount: Int) -> [Int] {
+    /// "slide #4", "pg 12", "slides 3 through 6". `slidesOnly`: just "slide(s) N", for a question asked with the notes,
+    /// where "p. 12" or "page 7" is a page of the notes.
+    static func referencedSlides(in text: String, pageCount: Int, slidesOnly: Bool = false) -> [Int] {
+        let names = slidesOnly ? "slides?" : #"slides?|pages?|pgs?\.?|pp?\."#
         guard let re = try? NSRegularExpression(
-            pattern: #"\b(?:slides?|pages?|pgs?\.?|pp?\.)\s*(#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?(?:\s*(?:,\s*and|,|and|&)\s*#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?)*)"#,
+            pattern: #"\b(?:\#(names))\s*(#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?(?:\s*(?:,\s*and|,|and|&)\s*#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?)*)"#,
             options: .caseInsensitive) else { return [] }
         var out: [Int] = []
         let ns = text as NSString
