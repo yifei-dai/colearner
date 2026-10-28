@@ -31,6 +31,7 @@ struct WalkthroughAskTests {
             - second
             a | b
             Show more
+            Reset
             """#)
         // A selection that starts and ends inside text, across a formula and a block boundary.
         let partial = try await page.string("""
@@ -107,7 +108,7 @@ struct WalkthroughAskTests {
             """)
         let span = try await page.json("__coLearnerAsk.collect()")
         #expect(span?["section"] as? String == "Topic 3 · 2D rotation › Properties › Composition")
-        #expect(span?["text"] as? String == "Composition\nRotations add angles.\n- first\n- second\na | b\nShow more")
+        #expect(span?["text"] as? String == "Composition\nRotations add angles.\n- first\n- second\na | b\nShow more\nReset")
 
         // Text selected in an answer box is not a passage of the page.
         _ = try await page.evaluate("var i = document.getElementById('answer'); i.focus(); i.setSelectionRange(0, 3); true")
@@ -223,6 +224,209 @@ struct WalkthroughAskTests {
         try await page.select("p1")
         try await page.mouseUp(on: "p1")
         try await page.waitFor(AskPage.buttonShown)
+    }
+
+    // MARK: study pages as they are (checkpoints, demos, long sections, page macros)
+
+    @Test func aSelectionOfOnlyFormulasCounts() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        // A drag across a display formula selects inside its container; MathJax's SVG has no text to show for it.
+        let shown = try await page.evaluate("""
+            (function () {
+              var eq = document.querySelector('#derive mjx-container'); eq.scrollIntoView({block: 'center'});
+              getSelection().setBaseAndExtent(eq, 0, eq, 1);
+              return getSelection().toString();
+            })()
+            """) as? String
+        #expect(shown == "")
+        try await page.mouseUp(on: "derive")
+        try await page.waitFor(AskPage.buttonShown)
+        let one = try await page.json("__coLearnerAsk.collect()")
+        #expect(one?["kind"] as? String == "selection")
+        #expect(one?["text"] as? String == "$$x = 1$$")
+        #expect(one?["section"] as? String == "Topic 2 · Notation")
+        // Two stacked lines with only white space between them.
+        _ = try await page.evaluate("""
+            var c = document.querySelectorAll('#derive mjx-container'); getSelection().setBaseAndExtent(c[0], 0, c[1], 1); true
+            """)
+        #expect(try await page.evaluate("getSelection().toString().trim()") as? String == "")
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == "$$x = 1$$\n$$y = 2$$")
+    }
+
+    @Test func answerChoicesAndOtherButtonsKeepTheirText() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        // A choice's key and text sit side by side (the button is a flex row): "A. ...", with its math.
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('cp1'))") == #"""
+            Checkpoint
+            Which matrix undoes a rotation?
+            A. Its transpose $R^{\top}$
+            B. Its negative
+            Check
+            """#)
+        // Selected from inside a choice; other flex rows keep a line per item.
+        #expect(try await page.string("""
+            (function () {
+              var b = document.querySelector('#cp1 .q-opt'), r = document.createRange();
+              r.setStart(b.querySelector('.k').firstChild, 0); r.setEnd(b.querySelector('.t').firstChild, 3);
+              return __coLearnerAsk.textOf(r);
+            })()
+            """) == "A. Its")
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('q-1'))")
+                == "Q1\nTopic 1 · Frames\nWhich is a rotation?")
+    }
+
+    @Test func supAndSubAreWrittenAsTeX() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('sup'))")
+                == "The inverse is T^{−1} = [R^{T}, −R^{T}p]; error drops to 10^{-3} at x_{a}.")
+    }
+
+    @Test func aSelectionThatOnlyTouchesTheNextBlockLeavesItOut() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        func text(_ range: String) async throws -> String {
+            try await page.string("(function () { var r = document.createRange(); \(range); return __coLearnerAsk.textOf(r); })()")
+        }
+        // Triple clicks end at the start of the next block: its display formula or list marker isn't selected.
+        #expect(try await text("r.setStart(document.getElementById('tri').firstChild, 0); r.setEnd(document.querySelector('.eq mjx-container'), 0)")
+                == "Only the frame's orientation matters.")
+        #expect(try await text("r.setStart(document.getElementById('pre-list').firstChild, 0); r.setEnd(document.getElementById('li1'), 0)")
+                == "See slides 8 to 10.")
+        #expect(try await text("r.setStart(document.getElementById('pre-list').firstChild, 0); r.setEnd(document.getElementById('li1').firstChild, 0)")
+                == "See slides 8 to 10.")
+        // A drag from the margin after a list item starts at its very end.
+        #expect(try await text("r.setStart(document.getElementById('li1'), 1); r.setEnd(document.getElementById('post-list').firstChild, 10)")
+                == "Next line.")
+        // As a selection: the formula's macros don't come along either.
+        _ = try await page.evaluate("""
+            var t = document.getElementById('tri'); t.scrollIntoView({block: 'center'});
+            getSelection().setBaseAndExtent(t.firstChild, 0, document.querySelector('.eq mjx-container'), 0); true
+            """)
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == "Only the frame's orientation matters.")
+    }
+
+    @Test func aLongSectionIsQuotedFromThePartOnScreen() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        #expect(try await page.string("__coLearnerAsk.textOf(document.getElementById('long-sub'), 20000)").count > 6000)
+        // Paragraph 25 starts just below the 40 px top bar: far past the first 6000 characters of the subsection.
+        _ = try await page.evaluate("window.scrollTo(0, document.getElementById('l25').getBoundingClientRect().top + pageYOffset - 41); true")
+        let long = try #require(try await page.json("__coLearnerAsk.collect()"))
+        #expect(long["kind"] as? String == "section")
+        #expect(long["section"] as? String == "Topic 3 · A long section › Many paragraphs")
+        let text = try #require(long["text"] as? String)
+        #expect(text.hasPrefix("Many paragraphs\n…\nParagraph 25: lorem ipsum"), "its title, then from the first paragraph on screen")
+        #expect(text.contains("Paragraph 30: ") && !text.contains("Paragraph 24: ") && text.count <= 6000)
+
+        // A section that fits is quoted whole, even with its heading under the top bar.
+        _ = try await page.evaluate("""
+            window.scrollTo(0, document.querySelector('#notation h2').getBoundingClientRect().bottom + pageYOffset - 30); true
+            """)
+        let short = try #require(try await page.json("__coLearnerAsk.collect()"))
+        #expect(short["section"] as? String == "Topic 2 · Notation")
+        #expect((short["text"] as? String)?.hasPrefix("Topic 2 · Notation\nThe inverse is T^{−1}") == true)
+    }
+
+    @Test func aSelectionScrolledOutOfViewGivesWayToTheSectionOnScreen() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        try await page.select("tri")
+        try await page.mouseUp(on: "tri")
+        try await page.waitFor(AskPage.buttonShown)
+        #expect(try await page.json("__coLearnerAsk.collect()")?["kind"] as? String == "selection")
+        // The page moves on (Follow slides scrolls it): the button hides, and can't be clicked where it was.
+        _ = try await page.evaluate("window.scrollTo(0, document.getElementById('l10').getBoundingClientRect().top + pageYOffset - 41); true")
+        try await page.waitFor("getComputedStyle(document.querySelector('colearner-ask')).visibility === 'hidden'")
+        #expect(try await page.json(AskPage.buttonState)?["hit"] as? Bool == false)
+        let quote = try await page.json("__coLearnerAsk.collect()")
+        #expect(quote?["kind"] as? String == "section")
+        #expect(quote?["section"] as? String == "Topic 3 · A long section › Many paragraphs")
+        #expect(try await page.evaluate("getSelection().toString()") as? String == "Only the frame's orientation matters.")
+        // Text in the sticky top bar is on screen although it sits above the bar's bottom edge.
+        _ = try await page.evaluate("""
+            var r = document.createRange(); r.selectNodeContents(document.querySelector('.topnav a'));
+            getSelection().removeAllRanges(); getSelection().addRange(r); true
+            """)
+        let bar = try await page.json("__coLearnerAsk.collect()")
+        #expect(bar?["kind"] as? String == "selection" && bar?["text"] as? String == "Checkpoints")
+    }
+
+    @Test func buttonKeepsOffControlsAndStaysAwayOnceDismissed() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        // A checkpoint's question: the answer choices are right below its line, so the button goes above it.
+        try await page.select("cpq")
+        try await page.mouseUp(on: "cpq")
+        try await page.waitFor(AskPage.buttonShown)
+        let state = try #require(try await page.json(AskPage.buttonState))
+        #expect(state["hit"] as? Bool == true)
+        let covered = try await page.evaluate("""
+            (function () {
+              var b = document.querySelector('colearner-ask').getBoundingClientRect();
+              return Array.from(document.querySelectorAll('#cp1 button')).filter(function (x) {
+                var r = x.getBoundingClientRect();
+                return r.left < b.right && b.left < r.right && r.top < b.bottom && b.top < r.bottom;
+              }).length;
+            })()
+            """) as? Int
+        #expect(covered == 0, "no answer choice under the button")
+        let line = try #require(try await page.json("JSON.parse(JSON.stringify(getSelection().getRangeAt(0).getBoundingClientRect()))"))
+        let top = try #require(state["top"] as? Double), height = try #require(state["height"] as? Double)
+        #expect(abs(top + height + 6 - (try #require(line["top"] as? Double))) < 1, "just above the line")
+
+        // Answering (WebKit keeps the selection when a button is clicked): the button doesn't come back.
+        _ = try await page.evaluate("""
+            var b = document.querySelectorAll('#cp1 .q-opt')[1];
+            ['mousedown', 'mouseup', 'click'].forEach(function (t) { b.dispatchEvent(new MouseEvent(t, {bubbles: true, button: 0})); });
+            true
+            """)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(try await page.evaluate(AskPage.buttonShown) as? Bool == false)
+        #expect(try await page.evaluate("getSelection().toString()") as? String == "Which matrix undoes a rotation?")
+
+        // A new selection brings it back; the app's hide() sends it away the same way.
+        try await page.select("tri")
+        try await page.mouseUp(on: "tri")
+        try await page.waitFor(AskPage.buttonShown)
+        #expect(try await page.evaluate("__coLearnerAsk.hide()") as? Bool == true)
+        #expect(try await page.evaluate(AskPage.buttonShown) as? Bool == false)
+        try await page.mouseUp(on: "tri")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(try await page.evaluate(AskPage.buttonShown) as? Bool == false)
+        #expect(page.asks.isEmpty)
+    }
+
+    @Test func quotesEndWithThePageMacrosTheyUse() async throws {
+        let page = try AskPage(html: AskPage.practice)
+        defer { page.close() }
+        try await page.load()
+        // The definitions of the macros used, then of those they use; none the quote doesn't use.
+        try await page.select("macro")
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == #"""
+            Turn with $\Rot(R)\,\Trans(d)$, then $\bm{p}\Qfree$.
+
+            Macros used above (defined by this page): \Rot = \operatorname{Rot}; \Trans = \operatorname{Trans}; \bm{#1} = \boldsymbol{#1}; \Qfree = \Qsp_{\text{free}}; \Qsp = \mathcal{Q}
+            """#)
+        try await page.select("cpq")
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == "Which matrix undoes a rotation?")
+        // Before MathJax has started, window.MathJax is still the page's configuration.
+        _ = try await page.evaluate(#"window.__mj = window.MathJax; window.MathJax = { tex: { macros: { tp: '^{\\top}' } } }; true"#)
+        try await page.select("raw")
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String
+                == #"Before typesetting: $v\tp$"# + "\n\n" + #"Macros used above (defined by this page): \tp = ^{\top}"#)
+        // A page without MathJax: no line.
+        _ = try await page.evaluate("delete window.MathJax; true")
+        #expect(try await page.json("__coLearnerAsk.collect()")?["text"] as? String == #"Before typesetting: $v\tp$"#)
     }
 
     // MARK: the controller
@@ -432,8 +636,8 @@ private final class AskPage: NSObject, WKScriptMessageHandler {
 
     /// Sections, a subsection with a heading span, a sticky top bar, formulas as MathJax 3 and KaTeX leave them in
     /// the page (MathJax's records faked like 3.2.2's startup.document.math: a linked list that is only iterable,
-    /// including a record of a formula no longer in the page), and things a reader doesn't see or that aren't text:
-    /// an assistive copy of each formula, a hidden answer, a folded <details>, a button, a text field.
+    /// including a record of a formula no longer in the page), things a reader doesn't see or that aren't text (an
+    /// assistive copy of each formula, a hidden answer, a folded <details>, a text field) and a button, whose text is.
     nonisolated static let walkthrough = #"""
         <!doctype html>
         <html><head><meta charset="utf-8"><title>Ask fixture</title>
@@ -488,6 +692,90 @@ private final class AskPage: NSObject, WKScriptMessageHandler {
           var list = {};
           list[Symbol.iterator] = function* () { for (var i = 0; i < items.length; i++) yield items[i]; };
           window.MathJax = { startup: { document: { math: list } } };
+        </script>
+        </body></html>
+        """#
+
+    /// What real study pages have that the fixture above doesn't: a checkpoint (answer choices are flex-row buttons with
+    /// a key, one with a formula, then a Check button) and a quiz card head, <sup>/<sub> in prose, a paragraph followed
+    /// by a display formula and one by a list, formulas that use the page's own macros (MathJax.config.tex.macros),
+    /// stacked display formulas, raw TeX not yet typeset, and a subsection of 30 paragraphs (over 9000 characters).
+    /// MathJax's assistive copies can't be selected, as on real pages.
+    nonisolated static let practice = #"""
+        <!doctype html>
+        <html><head><meta charset="utf-8"><title>Ask practice fixture</title>
+        <style>
+          body { margin: 0; font: 16px/1.5 -apple-system, sans-serif; }
+          .topnav { position: sticky; top: 0; height: 40px; background: #ddd; }
+          section { padding: 0 20px; }
+          mjx-container[display="true"] { display: block; text-align: center; }
+          mjx-assistive-mml { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(1px, 1px, 1px, 1px);
+            -webkit-user-select: none; user-select: none; }
+          .cp-opts { display: grid; gap: 8px; }
+          .q-opt { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left; font: inherit; padding: 10px 12px; }
+          .q-head { display: flex; gap: 10px; }
+          .tall { height: 900px; }
+        </style></head>
+        <body>
+        <nav class="topnav"><a href="#cp">Checkpoints</a> <a href="#long">Long</a></nav>
+        <main>
+        <section class="topic" id="cp">
+          <h2>Topic 1 · Checkpoints</h2>
+          <div class="cp" id="cp1">
+            <p class="cp-h">Checkpoint</p>
+            <p class="cp-q" id="cpq">Which matrix undoes a rotation?</p>
+            <div class="cp-opts">
+              <button class="q-opt" type="button"><span class="k">A</span><span class="t">Its transpose <mjx-container class="MathJax" jax="SVG"><svg width="30" height="16"></svg><mjx-assistive-mml><math><mi>R</mi></math></mjx-assistive-mml></mjx-container></span></button>
+              <button class="q-opt" type="button"><span class="k">B</span><span class="t">Its negative</span></button>
+            </div>
+            <div class="cp-row"><button class="btn" type="button">Check</button></div>
+          </div>
+          <article class="q" id="q-1"><div class="q-head"><span class="q-num">Q1</span><span class="q-tag">Topic 1 · Frames</span></div>
+            <p class="q-text">Which is a rotation?</p></article>
+        </section>
+        <section class="topic" id="notation">
+          <h2>Topic 2 · Notation</h2>
+          <p id="sup">The inverse is T<sup>−1</sup> = [R<sup>T</sup>, −R<sup>T</sup>p]; error drops to 10<sup>-3</sup> at x<sub>a</sub>.</p>
+          <p id="tri">Only the frame's orientation matters.</p>
+          <div class="eq"><mjx-container class="MathJax" jax="SVG" display="true"><svg width="80" height="20"></svg><mjx-assistive-mml display="block"><math><mi>v</mi></math></mjx-assistive-mml></mjx-container></div>
+          <p id="pre-list">See slides 8 to 10.</p>
+          <ul><li id="li1">first item</li></ul>
+          <p id="post-list">Next line.</p>
+          <p id="macro">Turn with <mjx-container class="MathJax" jax="SVG"><svg width="60" height="16"></svg><mjx-assistive-mml><math><mi>T</mi></math></mjx-assistive-mml></mjx-container>, then <mjx-container class="MathJax" jax="SVG"><svg width="30" height="16"></svg><mjx-assistive-mml><math><mi>p</mi></math></mjx-assistive-mml></mjx-container>.</p>
+          <div class="derive" id="derive"><mjx-container class="MathJax" jax="SVG" display="true"><svg width="60" height="20"></svg><mjx-assistive-mml display="block"><math><mi>x</mi></math></mjx-assistive-mml></mjx-container>
+          <mjx-container class="MathJax" jax="SVG" display="true"><svg width="60" height="20"></svg><mjx-assistive-mml display="block"><math><mi>y</mi></math></mjx-assistive-mml></mjx-container></div>
+          <p id="raw">Before typesetting: $v\tp$</p>
+        </section>
+        <section class="topic" id="long">
+          <h2>Topic 3 · A long section</h2>
+          <div class="sub" id="long-sub"><h3>Many paragraphs</h3></div>
+        </section>
+        <div class="tall"></div>
+        </main>
+        <script>
+          var sub = document.getElementById("long-sub");
+          for (var i = 1; i <= 30; i++) {
+            var p = document.createElement("p");
+            p.id = "l" + i;
+            p.textContent = "Paragraph " + i + ": " + "lorem ipsum dolor sit amet ".repeat(11).trim();
+            sub.appendChild(p);
+          }
+          var c = document.querySelectorAll("mjx-container");
+          var items = [
+            { typesetRoot: c[0], math: "R^{\\top}", display: false },
+            { typesetRoot: c[1], math: "v^b = R(\\theta)\\tp\\, v^a", display: true },
+            { typesetRoot: c[2], math: "\\Rot(R)\\,\\Trans(d)", display: false },
+            { typesetRoot: c[3], math: "\\bm{p}\\Qfree", display: false },
+            { typesetRoot: c[4], math: "x = 1", display: true },
+            { typesetRoot: c[5], math: "y = 2", display: true }
+          ];
+          var list = {};
+          list[Symbol.iterator] = function* () { for (var i = 0; i < items.length; i++) yield items[i]; };
+          window.MathJax = {
+            config: { tex: { macros: { tp: "^{\\top}", Rot: "\\operatorname{Rot}", Trans: "\\operatorname{Trans}",
+              bm: ["\\boldsymbol{#1}", 1], Qsp: "\\mathcal{Q}", Qfree: "\\Qsp_{\\text{free}}", unused: "\\text{never}" } } },
+            startup: { document: { math: list } }
+          };
         </script>
         </body></html>
         """#
