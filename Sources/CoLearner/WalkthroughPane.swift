@@ -227,7 +227,9 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
         guard let path = loadedPath, r.width >= 4, r.height >= 4 else { done(nil, nil); return }
         let zoom = max(webView.pageZoom * webView.magnification, 0.01)
         let point = "\(Double(r.midX / zoom)), \(Double(r.midY / zoom))"
-        webView.evaluateJavaScript("window.__coLearnerAsk ? __coLearnerAsk.sectionAt(\(point)) : ''") { [weak self] found, _ in
+        // The "Ask about this" pill is put away first so the picture doesn't show it.
+        let script = "window.__coLearnerAsk ? ((__coLearnerAsk.hide && __coLearnerAsk.hide()), __coLearnerAsk.sectionAt(\(point))) : ''"
+        webView.evaluateJavaScript(script) { [weak self] found, _ in
             MainActor.assumeIsolated {
                 guard let self, self.loadedPath == path else { done(nil, nil); return }
                 let section = (found as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }

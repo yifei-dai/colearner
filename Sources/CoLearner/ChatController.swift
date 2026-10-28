@@ -266,7 +266,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
             area = nil
             dropQuote()
             js("setThread", ["hasDeck": false, "messages": [], "pages": [], "provider": model.provider, "history": [],
-                             "area": NSNull(), "conversation": NSNull(), "images": imagesJS, "quote": NSNull()] as [String: Any])
+                             "area": NSNull(), "conversation": NSNull(), "images": imagesJS, "quote": NSNull(),
+                             "processing": imagesInFlight] as [String: Any])
             return
         }
         // A selected area belongs to its slide; moving on drops it. A walkthrough quote belongs to its deck.
@@ -287,6 +288,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             "area": areaJS,
             "images": imagesJS,
             "quote": pendingQuote?.js ?? NSNull(),
+            "processing": imagesInFlight,
         ] as [String: Any])
     }
 
@@ -348,8 +350,11 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     private func pushAttachments() {
-        js("setAttachments", ["images": imagesJS, "quote": pendingQuote?.js ?? NSNull()] as [String: Any])
+        js("setAttachments", ["images": imagesJS, "quote": pendingQuote?.js ?? NSNull(), "processing": imagesInFlight] as [String: Any])
     }
+
+    /// The chat's Search box is open (⌘V there pastes text into it, never a picture into the chat box).
+    private(set) var searchOpen = false
 
     /// A short line under the chat box ("Only images can be attached").
     private func note(_ text: String, error: Bool = true) {
@@ -363,13 +368,13 @@ final class ChatController: NSObject, WKNavigationDelegate {
             return
         }
         imagesInFlight += 1
+        pushAttachments()   // the page shows that a picture is on its way and holds the question until it is in
         imageQueue.async {
             let image = make()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.imagesInFlight -= 1
-                    guard let image else { self.note(failure); return }
-                    self.pendingImages.append(image)
+                    if let image { self.pendingImages.append(image) } else { self.note(failure) }
                     self.pushAttachments()
                 }
             }
@@ -466,6 +471,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         switch body["type"] as? String {
         case "ready":
             ready = true
+            searchOpen = false
             searchTask?.cancel()
             searchGeneration += 1
             searchRequest = nil
@@ -480,6 +486,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
             searchChats(query: query, requestID: id)
         case "openSearchResult":
             if let id = body["id"] as? String { openSearchResult(id) }
+        case "searchState":
+            searchOpen = body["open"] as? Bool ?? false
         case "turn":
             if let d = body["delta"] as? Int { model.go(d) }
         case "setModel":
@@ -730,7 +738,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             if m.role == .user {
                 if m.areaThumb != nil { body += " [asked about an area of the slide that the student selected]" }
                 if let n = m.images?.count, n > 0 {
-                    body += " [\(n == 1 ? "an image" : "\(n) images") the student attached went with this; you were not shown \(n == 1 ? "it" : "them")]"
+                    body += " [\(n == 1 ? "an image" : "\(n) images") the student attached went with this; not included here]"
                 }
                 if let q = m.quote {
                     let clip = q.text.count > 1500 ? String(q.text.prefix(1500)) + " …" : q.text

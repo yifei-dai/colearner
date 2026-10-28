@@ -142,9 +142,14 @@ enum DeckContext {
         if area { parts.append("the area of slide \(page) the student selected") }
         parts += images
         if !parts.isEmpty { note += " Attached images, in order: " + parts.joined(separator: ", ") + "." }
-        if quote { note += " The question is about the quoted passage." }
-        else if area { note += " The question is about the selected area." }
-        else if !images.isEmpty { note += " The question is about the attached \(images.count == 1 ? "image" : "images")." }
+        // Everything the student attached, as the chat box shows it (none of them outranks the others).
+        var about: [String] = []
+        if area { about.append("the selected area") }
+        if quote { about.append("the quoted passage") }
+        if !images.isEmpty { about.append(images.count == 1 ? "the attached image" : "the attached images") }
+        if let last = about.popLast() {
+            note += " The question is about " + (about.isEmpty ? last : about.joined(separator: ", ") + " and " + last) + "."
+        }
         return note
     }
 
@@ -154,7 +159,9 @@ enum DeckContext {
         let page = "the walkthrough page for this deck (a study page written from these slides)"
         let tag: String, intro: String
         switch q.kind {
-        case "notes": (tag, intro) = ("notes_excerpt", "The student selected this passage in the typed notes for this deck:")
+        case "notes":
+            (tag, intro) = ("notes_excerpt", "The student selected this passage in the typed notes for this deck "
+                + "(text taken from the PDF, so formulas may be garbled):")
         case "section": (tag, intro) = ("walkthrough_excerpt", "The student is reading this section of \(page):")
         case "reply":
             let whose = p != nil && q.provider == p ? "your" : (q.provider?.displayName ?? "an assistant") + "’s"

@@ -264,6 +264,92 @@ struct ChatAttachmentUITests {
         #expect(plain["quoteID"] is NSNull)
     }
 
+    @Test func anEmptyBoxWithSomethingAttachedAsksToExplainIt() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await web.load()
+        let enter = "{ const i = document.querySelector('#input'); i.value = '  '; "
+            + "i.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true})); } null;"
+        // Nothing attached: an empty box sends nothing, as before.
+        try await web.call("setThread", thread())
+        web.clearMessages()
+        _ = try await web.evaluate(enter)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(posts("send", in: web).isEmpty)
+        // A picture waiting: Enter is "Explain the screenshot", with the picture.
+        try await web.call("setAttachments", ["images": [image("a", "one.png")], "quote": NSNull()])
+        _ = try await web.evaluate(enter)
+        let sent = try await web.waitForMessage(type: "send")
+        #expect(sent["display"] as? String == "Explain the screenshot")
+        #expect(sent["imageIDs"] as? [String] == ["a"])
+        // A quoted passage: "Explain this passage", from Send too.
+        try await web.call("setAttachments", ["images": [], "quote": walkthroughQuote])
+        web.clearMessages()
+        _ = try await web.evaluate("document.querySelector('#input').value = ''; document.querySelector('#btn-send').click(); null;")
+        #expect(try await web.waitForMessage(type: "send")["display"] as? String == "Explain this passage")
+    }
+
+    @Test func aQuestionWaitsForPicturesStillBeingPrepared() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await web.load()
+        try await web.call("setThread", thread(images: [image("a", "one.png")]))
+        try await web.call("setAttachments", ["images": [image("a", "one.png")], "quote": NSNull(), "processing": 2])
+        #expect(try await text(".att-wait", in: web) == "Preparing 2 pictures…")
+        web.clearMessages()
+        _ = try await web.evaluate("document.querySelector('#input').value = 'What is this?'; document.querySelector('#btn-send').click(); null;")
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(posts("send", in: web).isEmpty)
+        #expect(try await text("#note", in: web) == "A picture is still being prepared. Send again in a moment.")
+        #expect(try await web.evaluate("document.querySelector('#input').value") as? String == "What is this?")
+        // In: the chip goes, the question goes with both pictures.
+        try await web.call("setAttachments", ["images": [image("a", "one.png"), image("b", "two.png")], "quote": NSNull(), "processing": 0])
+        #expect(try await flag("!document.querySelector('.att-wait')", in: web))
+        _ = try await web.evaluate("document.querySelector('#btn-send').click(); null;")
+        #expect(try await web.waitForMessage(type: "send")["imageIDs"] as? [String] == ["a", "b"])
+        // Only pictures being prepared still show the box.
+        try await web.call("setAttachments", ["images": [], "quote": NSNull(), "processing": 1])
+        #expect(try await flag("!document.querySelector('#attachbox').hidden", in: web))
+        #expect(try await text(".att-wait", in: web) == "Preparing a picture…")
+    }
+
+    @Test func keyboardFocusStaysOnTheSameRemoveButtonWhenAPictureArrives() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await web.load()
+        try await web.call("setThread", thread(images: [image("a", "one.png")], quote: walkthroughQuote))
+        _ = try await web.evaluate("document.querySelector('.att-quote .att-x').focus(); null;")
+        try await web.call("setAttachments", ["images": [image("a", "one.png"), image("b", "two.png")], "quote": walkthroughQuote])
+        #expect(try await flag("document.activeElement === document.querySelector('.att-quote .att-x')", in: web))
+        web.clearMessages()
+        _ = try await web.evaluate("document.activeElement.click(); null;")
+        #expect(try await web.waitForMessage(type: "clearQuote")["type"] as? String == "clearQuote")
+        #expect(posts("removeImage", in: web).isEmpty)
+    }
+
+    @Test func thumbnailsCannotBeDraggedBackIntoTheChat() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await web.load()
+        let messages: [[String: Any]] = [["id": "q", "role": "user", "page": 4, "text": "These?", "status": "done",
+                                          "areaThumb": picture(), "images": [["label": "one.png", "thumb": picture()]]]]
+        try await web.call("setThread", thread(images: [image("a", "one.png")], area: ["page": 4, "thumb": picture()], messages: messages))
+        #expect(try await flag("Array.from(document.querySelectorAll('#attachbox img, .bubble img')).length === 3", in: web))
+        #expect(try await flag("Array.from(document.querySelectorAll('#attachbox img, .bubble img')).every(i => i.draggable === false)", in: web))
+    }
+
+    @Test func theAppLearnsWhenTheSearchBoxIsOpen() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await web.load()
+        web.clearMessages()
+        _ = try await web.evaluate("CL.openSearch(); null;")
+        #expect(try await web.waitForMessage(type: "searchState")["open"] as? Bool == true)
+        web.clearMessages()
+        _ = try await web.evaluate("document.querySelector('#search-close').click(); null;")
+        #expect(try await web.waitForMessage(type: "searchState")["open"] as? Bool == false)
+    }
+
     // MARK: question bubbles
 
     @Test func questionBubblesShowPicturesAndAnExpandableQuote() async throws {

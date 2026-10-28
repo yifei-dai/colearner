@@ -205,11 +205,16 @@ struct AttachmentTests {
                 == "[The student is on slide 3 of 10.] Attached images, in order: an image the student pasted. The question is about the attached image.")
         #expect(DeckContext.questionNote(page: 3, count: 10, slides: [3], area: true, images: ["a", "b"], quote: false)
                 == "[The student is on slide 3 of 10.] Attached images, in order: slide 3, the area of slide 3 the student selected, a, b. "
-                    + "The question is about the selected area.")
+                    + "The question is about the selected area and the attached images.")
         #expect(DeckContext.questionNote(page: 3, count: 10, slides: [], area: false, images: ["a", "b"], quote: false)
                 .hasSuffix("The question is about the attached images."))
         #expect(DeckContext.questionNote(page: 3, count: 10, slides: [], area: false, images: ["a"], quote: true)
-                == "[The student is on slide 3 of 10.] Attached images, in order: a. The question is about the quoted passage.")
+                == "[The student is on slide 3 of 10.] Attached images, in order: a. The question is about the quoted passage and the attached image.")
+        // Everything attached is named, in the chat box's order (none outranks the others).
+        #expect(DeckContext.questionNote(page: 3, count: 10, slides: [], area: true, images: ["a"], quote: true)
+                .hasSuffix("The question is about the selected area, the quoted passage and the attached image."))
+        #expect(DeckContext.questionNote(page: 3, count: 10, slides: [], area: false, images: [], quote: true)
+                == "[The student is on slide 3 of 10.] The question is about the quoted passage.")
     }
 
     @Test func excerptsSayWhereThePassageComesFrom() {
@@ -226,7 +231,7 @@ struct AttachmentTests {
         #expect(section.contains("<walkthrough_excerpt from=\"Review\">\nWhole section\n</walkthrough_excerpt>"))
 
         let notes = DeckContext.excerpt(ChatQuote(source: "L03_notes", section: "page 7", text: "DH table", kind: "notes"))
-        #expect(notes.hasPrefix("The student selected this passage in the typed notes for this deck:"))
+        #expect(notes.hasPrefix("The student selected this passage in the typed notes for this deck (text taken from the PDF, so formulas may be garbled):"))
         #expect(notes.contains("<notes_excerpt from=\"L03_notes\" where=\"page 7\">\nDH table\n</notes_excerpt>"))
     }
 
@@ -240,10 +245,10 @@ struct AttachmentTests {
         area.images = [MessageImage(label: "c.png", thumb: "x")]
         let answer = ChatMessage(role: .assistant, provider: .claude, text: "Because R^T R = I.", page: 4)
         let s = ChatController.transcript([asked, area, answer], tag: "t", you: .codex)
-        #expect(s.contains("[Student, slide 4]: Why is this orthogonal? [2 images the student attached went with this; you were not shown them]"))
+        #expect(s.contains("[Student, slide 4]: Why is this orthogonal? [2 images the student attached went with this; not included here]"))
         #expect(s.contains("\n(With this passage quoted from Frames Walkthrough › Topic 2: " + String(repeating: "q", count: 1500) + " …)"))
         #expect(s.contains("[Student, slide 5]: And this? [asked about an area of the slide that the student selected] "
-                           + "[an image the student attached went with this; you were not shown it]"))
+                           + "[an image the student attached went with this; not included here]"))
         #expect(s.contains("[Claude, slide 4]: Because R^T R = I.\n"))
         #expect(!s.contains("data:image"))
     }

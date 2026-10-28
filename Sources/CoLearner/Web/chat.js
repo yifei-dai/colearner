@@ -62,7 +62,7 @@
   // messages = the whole conversation about the deck; each carries the slide it was asked on.
   // images/quote: what waits in the chat box for the next question ([{id, label, thumb}], {id, source, section?, text, kind}).
   let state = { hasDeck: false, deckTitle: "", deckPath: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
-                conversation: null, history: [], area: null, images: [], quote: null };
+                conversation: null, history: [], area: null, images: [], quote: null, processing: 0 };
   let viewAll = false;   // "This slide" (default) or "All"
   function visible(m) { return viewAll || m.page == null || m.page === state.page; }
   // The app owns the pictures and the quote (by id); the page shows them and says which ones a question took.
@@ -200,13 +200,14 @@
   let attachSig = null;
   function renderAttachments() {
     const box = $("#attachbox");
-    const list = pics(), q = quoted();
+    const list = pics(), q = quoted(), waiting = preparing();
     // Rebuilt only when they change: renderHeader runs with every streamed update.
-    const sig = JSON.stringify([list.map((i) => [i.id, i.label, String(i.thumb).length]), q]);
+    const sig = JSON.stringify([list.map((i) => [i.id, i.label, String(i.thumb).length]), q, waiting]);
     if (sig === attachSig) return;
     attachSig = sig;
     // Removing pictures one after another from the keyboard keeps the focus on the x buttons.
-    const at = Array.from(box.querySelectorAll(".att-x")).indexOf(document.activeElement);
+    const xs0 = Array.from(box.querySelectorAll(".att-x")), at = xs0.indexOf(document.activeElement);
+    const focusKey = at >= 0 ? xs0[at].dataset.key : null;
     box.textContent = "";
     if (list.length) {
       const row = el("div", "att-pics");
@@ -218,13 +219,18 @@
           const img = el("img");
           img.src = i.thumb;
           img.alt = "";
+          img.draggable = false;   // dragging it would bring up the drop layer and attach it again
           chip.appendChild(img);
         }
         chip.appendChild(el("span", "att-label", label));
-        chip.appendChild(removeButton("Remove", "Remove " + label, () => post({ type: "removeImage", id: i.id })));
+        chip.appendChild(removeButton("Remove", "Remove " + label, () => post({ type: "removeImage", id: i.id }), "img:" + i.id));
         row.appendChild(chip);
       }
       box.appendChild(row);
+    }
+    if (waiting) {
+      const chip = el("span", "att-pic att-wait", waiting === 1 ? "Preparing a picture…" : "Preparing " + waiting + " pictures…");
+      (box.querySelector(".att-pics") || box.appendChild(el("div", "att-pics"))).appendChild(chip);
     }
     if (q) {
       const card = el("div", "att-quote");
@@ -232,18 +238,21 @@
       const from = el("div", "att-q-from", quoteFrom(q));
       from.title = quoteFrom(q);
       main.append(from, el("div", "att-q-text", q.text));
-      card.append(main, removeButton("Remove the quoted passage", "Remove the quoted passage", () => post({ type: "clearQuote" })));
+      card.append(main, removeButton("Remove the quoted passage", "Remove the quoted passage", () => post({ type: "clearQuote" }), "quote:" + q.id));
       box.appendChild(card);
     }
-    box.hidden = !list.length && !q;
+    box.hidden = !list.length && !q && !waiting;
     if (at >= 0) {
-      const xs = box.querySelectorAll(".att-x");
-      (xs[Math.min(at, xs.length - 1)] || input).focus();
+      const xs = Array.from(box.querySelectorAll(".att-x"));
+      (xs.find((x) => x.dataset.key === focusKey) || xs[Math.min(at, xs.length - 1)] || input).focus();
     }
   }
-  function removeButton(title, label, onclick) {
+  /// Pictures the app is still decoding (dropped, pasted or chosen a moment ago).
+  function preparing() { return Number.isInteger(state.processing) && state.processing > 0 ? state.processing : 0; }
+  function removeButton(title, label, onclick, key) {
     const x = el("button", "att-x", "✕");
     x.type = "button";
+    x.dataset.key = key;
     x.title = title;
     x.setAttribute("aria-label", label);
     x.onclick = onclick;
@@ -308,6 +317,7 @@
     clearTimeout(searchState.timer);
     searchLayer.hidden = true;
     setSearchBackground(false);
+    post({ type: "searchState", open: false });
     if (restoreFocus) {
       const target = searchState.returnFocus;
       (target && target.isConnected ? target : $("#btn-search")).focus();
@@ -336,6 +346,7 @@
     }
     searchState.open = true;
     searchLayer.hidden = false;
+    post({ type: "searchState", open: true });
     setSearchBackground(true);
     queueSearch();
     searchInput.focus();
@@ -861,6 +872,7 @@
       if (m.areaThumb) {
         const img = document.createElement("img");
         img.className = "area";
+        img.draggable = false;
         img.src = m.areaThumb;
         img.alt = "selected area";
         b.appendChild(img);
@@ -872,6 +884,7 @@
           if (!p || !safeThumb(p.thumb)) continue;
           const img = document.createElement("img");
           img.className = "shot";
+          img.draggable = false;
           img.src = p.thumb;
           img.alt = String(p.label || "attached picture");
           img.title = String(p.label || "");
@@ -1022,6 +1035,7 @@
     setAttachments(a) {
       state.images = a && Array.isArray(a.images) ? a.images : [];
       state.quote = a && a.quote && typeof a.quote === "object" ? a.quote : null;
+      state.processing = a && Number.isInteger(a.processing) && a.processing > 0 ? a.processing : 0;
       renderHeader();
     },
     showNote,
@@ -1070,10 +1084,17 @@
   function send(text, action) {
     if (!state.hasDeck) return;
     if (busy()) return;
+    // An empty box with an area, a quote or pictures waiting: Enter or Send asks to explain them.
+    if (!action && !text.trim() && (state.area || quoted() || pics().length)) action = "explain";
     const q = action ? quick(action) : null;
     const prompt = q ? q.prompt : text.trim();
     if (!prompt) return;
-    // The pictures and quote on screen now go with it (one still being read waits for the next question).
+    // A picture still being prepared would miss this question: wait for it.
+    if (preparing()) {
+      showNote({ text: "A picture is still being prepared. Send again in a moment.", error: false });
+      return;
+    }
+    // The pictures and quote on screen now go with it.
     const quote = quoted();
     post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider, useArea: !!state.area,
            imageIDs: pics().map((i) => i.id), quoteID: quote ? quote.id : null });

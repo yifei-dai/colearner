@@ -20,11 +20,12 @@ enum ImageAttachments {
     /// Long edge in pixels, as for slides: both assistants scale larger pictures down anyway, and once a chat holds
     /// more than 20 images Claude refuses any over 2000 px.
     static let longEdge: CGFloat = SlideImages.longEdge
-    /// A PNG bigger than this is sent as JPEG instead (Claude takes at most 5 MB per image, as base64).
-    static let maxBytes = 3_500_000
+    /// A PNG bigger than this is sent as JPEG instead. Every picture in a chat goes out again with each later question
+    /// (Claude Code sends the whole conversation, at most 32 MB), so photos must stay small.
+    static let maxBytes = 1_200_000
     /// Pictures per question.
     static let maxPending = 8
-    /// Files larger than this are not read at all.
+    /// Files larger than this are not read at all (pasteboard data is already in memory, so it is not limited).
     static let maxFileBytes = 60_000_000
     static let thumbEdge: CGFloat = 320
 
@@ -37,8 +38,7 @@ enum ImageAttachments {
     /// Any format macOS reads (PNG, JPEG, HEIC, TIFF, GIF, PDF…), upright (EXIF orientation applied), at most `longEdge`.
     static func make(data: Data, label: String, detail: String, in dir: URL = folder,
                      maxBytes: Int = maxBytes) -> PendingImage? {
-        guard data.count <= maxFileBytes, let src = CGImageSourceCreateWithData(data as CFData, nil),
-              CGImageSourceGetCount(src) > 0 else { return nil }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(src) > 0 else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -111,7 +111,8 @@ enum ImageAttachments {
         if !files.isEmpty { return files.filter(isImageFile).prefix(maxPending).map(Item.file) }
         if let text = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
            !isLoneURL(text) { return [] }
-        let types: [NSPasteboard.PasteboardType] = [.png, .tiff, .init(UTType.jpeg.identifier), .init(UTType.heic.identifier)]
+        // Compact formats first: a photo copied from Photos or Preview also comes as TIFF, often 50 MB or more.
+        let types: [NSPasteboard.PasteboardType] = [.png, .init(UTType.jpeg.identifier), .init(UTType.heic.identifier), .tiff]
         if let type = pb.availableType(from: types), let data = pb.data(forType: type) { return [.data(data)] }
         // Anything else NSImage reads (e.g. a PDF selection copied in Preview).
         if NSImage.canInit(with: pb), let image = NSImage(pasteboard: pb), let tiff = image.tiffRepresentation {

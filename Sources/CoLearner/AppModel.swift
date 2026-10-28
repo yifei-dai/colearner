@@ -51,8 +51,17 @@ final class AppModel: ObservableObject {
     }
 
     /// Chat / Walkthrough shown in windows of their own (see PopOutWindows).
-    @Published private(set) var poppedOut: Set<RightTab> = []
+    @Published private(set) var poppedOut: Set<RightTab> = [] { didSet { endHiddenWalkthroughArea() } }
     lazy var popOuts = PopOutWindows(model: self)
+
+    /// The walkthrough is on screen: in its own window, or as the tab the right panel shows.
+    var walkthroughOnScreen: Bool { poppedOut.contains(.walkthrough) || shownRightTab == .walkthrough }
+
+    /// Selecting an area of the walkthrough ends when the walkthrough leaves the screen (Esc would be taken by a mode
+    /// nobody sees, and the crosshair would wait for its return).
+    private func endHiddenWalkthroughArea() {
+        if selectingWalkthroughArea && !walkthroughOnScreen { selectingWalkthroughArea = false }
+    }
 
     /// The panel the right side shows: the chosen tab, or the other one if the chosen one is popped out.
     var shownRightTab: RightTab {
@@ -104,7 +113,7 @@ final class AppModel: ObservableObject {
     private(set) var slideTexts: [String] = []
     /// Set when macOS refused access to a course folder (the one-time Desktop prompt was declined).
     @Published var folderAccessDenied = false
-    @Published var rightTab: RightTab = .chat
+    @Published var rightTab: RightTab = .chat { didSet { endHiddenWalkthroughArea() } }
     @Published var chatPages: Set<Int> = []
     @Published var provider: String = UserDefaults.standard.string(forKey: "provider") ?? "claude" {
         didSet { UserDefaults.standard.set(provider, forKey: "provider") }
@@ -205,7 +214,7 @@ final class AppModel: ObservableObject {
                 let fr = w.firstResponder as? NSView
                 let inChat = fr.map { $0 === self.chat.webView || $0.isDescendant(of: self.chat.webView) } ?? false
                 let inOtherPage = !inChat && (fr.map { $0 is WKWebView || $0.enclosingWebView != nil } ?? false)
-                if !(w.firstResponder is NSText), !inOtherPage, self.chat.pasteImages() {
+                if !(w.firstResponder is NSText), !inOtherPage, !(inChat && self.chat.searchOpen), self.chat.pasteImages() {
                     if !inChat {
                         self.showPanel(.chat)
                         DispatchQueue.main.async { self.chat.focusInput() }
@@ -593,6 +602,8 @@ final class AppModel: ObservableObject {
     /// being read. In notes: the selected text, else the notes page on screen as a picture.
     func askAboutWalkthrough() {
         guard deck != nil, let page = currentStudyPage else { NSSound.beep(); return }
+        // From the Chat tab (⇧⌘L): what's in a hidden walkthrough may be several slides behind, so show it first.
+        guard walkthroughOnScreen else { showPanel(.walkthrough); return }
         if page.isPDF {
             // Notes never opened in this tab (or another deck's still there): bring them up first.
             guard studyPDF.path == page.path, studyPDF.view.document != nil else { showPanel(.walkthrough); return }
