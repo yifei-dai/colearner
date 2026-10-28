@@ -17,8 +17,9 @@ struct PendingImage: Equatable, Sendable {
 
 /// Screenshots and other pictures for the chat: decoded, turned upright, scaled down and written to the cache.
 enum ImageAttachments {
-    /// Long edge in pixels. Claude scales larger images down to 1568 itself; ChatGPT can use the extra detail.
-    static let longEdge: CGFloat = 2048
+    /// Long edge in pixels, as for slides: both assistants scale larger pictures down anyway, and once a chat holds
+    /// more than 20 images Claude refuses any over 2000 px.
+    static let longEdge: CGFloat = SlideImages.longEdge
     /// A PNG bigger than this is sent as JPEG instead (Claude takes at most 5 MB per image, as base64).
     static let maxBytes = 3_500_000
     /// Pictures per question.

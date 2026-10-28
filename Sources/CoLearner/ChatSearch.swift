@@ -65,7 +65,8 @@ enum ChatSearch {
             for entry in candidates where seen.insert(entry.message.id).inserted {
                 if Task.isCancelled { return [] }
                 let message = entry.message
-                let text = [message.display, message.text].compactMap { $0 }.joined(separator: "\n")
+                // A quoted walkthrough passage is part of what was asked.
+                let text = [message.display, message.text, message.quote?.text].compactMap { $0 }.joined(separator: "\n")
                 guard terms.allSatisfy({ text.range(of: $0, options: options, locale: locale) != nil }) else { continue }
                 results.append(ChatSearchResult(deckPath: path, conversationID: entry.conversationID,
                                                 messageID: message.id, page: message.page, role: message.role,

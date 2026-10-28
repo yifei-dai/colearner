@@ -53,6 +53,17 @@ struct ChatSearchTests {
         #expect(results[1].snippet.count <= 222)
     }
 
+    @Test func findsQuestionsByTheirQuotedWalkthroughPassage() async throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var asked = message("quoted", "Explain the passage I quoted from the walkthrough.")
+        asked.quote = ChatQuote(source: "Frames Walkthrough", section: "Topic 3", text: "The Denavit–Hartenberg table has four columns.")
+        try write(DeckChats(deckPath: "/decks/frames.pdf", conversations: [Conversation(id: "c", messages: [asked])]), in: dir)
+        let results = await ChatStore(directory: dir).search(query: "denavit columns")
+        #expect(results.map(\.messageID) == ["quoted"])
+        #expect(results.first?.snippet.contains("Denavit–Hartenberg") == true)
+    }
+
     @Test func includesUnsavedCachedMessagesAndHonorsCachedDeletions() async throws {
         let dir = try directory()
         defer { try? FileManager.default.removeItem(at: dir) }
