@@ -52,7 +52,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #others .pg { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 0 7px; margin: 0 2px; font-size: 12px; }
 #others .pg:hover { border-color: var(--accent); color: var(--accent); }
 
-#head, #others, #composer { flex: 0 0 auto; }
+#head, #others { flex: 0 0 auto; }
 #log { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; position: relative; padding: 12px 12px 4px; }
 .empty { color: var(--muted); text-align: center; margin-top: 30%; padding: 0 20px; }
 .empty b { color: var(--ink); }
@@ -100,7 +100,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .visual iframe { width: 100%; border: 0; display: block; background: #fff; min-height: 120px; }
 .visual pre { margin: 0; border-radius: 0; max-height: 360px; }
 
-#composer { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 10px 10px; }
+/* Only the pictures and quote waiting in it can shrink (#attachbox below); the rest keeps its size. */
+#composer { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0;
+  border-top: 1px solid var(--line); background: var(--panel); padding: 8px 10px 10px; }
+#composer > * { flex-shrink: 0; }
 #quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .chip { border: 1px solid var(--line); background: var(--bg); border-radius: 14px; padding: 2px 10px; font-size: 12px; }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
@@ -211,9 +214,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #areabox img { max-height: 46px; max-width: 120px; border-radius: 4px; border: 1px solid var(--line); }
 #areabox #area-label { flex: 1; color: var(--ink); }
 .busynote { color: var(--muted); font-size: 12px; font-style: italic; }
-/* pictures and a quoted passage waiting for the next question; chips wrap in a narrow panel */
-#attachbox { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; min-width: 0; }
-/* eight pictures one per row would push the conversation off screen: the row scrolls instead */
+/* pictures and a quoted passage waiting for the next question; chips wrap in a narrow panel. In a short window they
+   give way first and scroll, so the conversation keeps a quarter of the window; if even that leaves too little room,
+   the top of the chat box is cut rather than Send and the status line. */
+#attachbox { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; min-width: 0; min-height: 0; overflow-y: auto; }
+#composer > #attachbox { flex-shrink: 1; }
+#attachbox > * { flex-shrink: 0; }
+body:has(#attachbox:not([hidden])) #log { min-height: 25vh; }
+body:has(#attachbox:not([hidden])) #composer { justify-content: flex-end; overflow: clip; }
+/* eight pictures one per row would take most of a tall window: the row scrolls instead */
 .att-pics { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-height: 30vh; overflow-y: auto; }
 .att-pic { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 3px;
   border: 1px solid var(--line); border-radius: 9px; background: var(--bg); font-size: 12px; }

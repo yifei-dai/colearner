@@ -94,12 +94,23 @@
   }
 
   // ---------- rendering ----------
+  // Whether the conversation follows its end: near the bottom when it last scrolled up, or back at it since. A taller
+  // chat box (a quote, pictures, which take their width only once loaded, the area, a longer question) or a shorter
+  // window shortens the conversation without scrolling it, so one that was following is pinned again. Only a scroll up
+  // stops it: the scroll event of the last pin can arrive after the chat box grew.
+  let following = true, lastTop = 0;
   function nearBottom() {
     return log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   }
   function toBottom() {
     log.scrollTop = log.scrollHeight;
+    following = true;
   }
+  log.addEventListener("scroll", () => {
+    following = log.scrollTop < lastTop ? nearBottom() : following || nearBottom();
+    lastTop = log.scrollTop;
+  }, { passive: true });
+  new ResizeObserver(() => { if (following) toBottom(); }).observe(log);
 
   // Busy = an assistant you are about to ask is still answering. In Both mode Claude usually finishes
   // first; a follow-up to Claude alone shouldn't have to wait for ChatGPT.
@@ -415,6 +426,7 @@
       target.tabIndex = -1;
       target.focus({ preventScroll: true });
       target.scrollIntoView({ block: "center", behavior: "auto" });
+      following = nearBottom();   // stays on the found message when the chat box changes too
     });
     highlightTimer = setTimeout(() => {
       if (highlightedMessageID !== id) return;
@@ -807,6 +819,8 @@
         post({ type: "openLink", url: a.getAttribute("href") });
       });
     }
+    // Dragging a picture in an answer would bring up the drop layer and attach it.
+    for (const img of bodyEl.querySelectorAll("img")) img.draggable = false;
   }
 
   // A passage quoted in a question: about six lines, and the rest on click when there is more (selecting text to copy
@@ -1072,8 +1086,9 @@
   function send(text, action) {
     if (!state.hasDeck) return;
     if (busy()) return;
-    // An empty box with an area, a quote or pictures waiting: Enter or Send asks to explain them.
-    if (!action && !text.trim() && (state.area || quoted() || pics().length)) action = "explain";
+    // An empty box with an area, a quote or pictures waiting (or one still being prepared): Enter or Send asks to
+    // explain them.
+    if (!action && !text.trim() && (state.area || quoted() || pics().length || preparing())) action = "explain";
     const q = action ? quick(action) : null;
     const prompt = q ? q.prompt : text.trim();
     if (!prompt) return;
@@ -1121,6 +1136,7 @@
       const replacement = id && elById.get(id);
       if (replacement && top != null) {
         log.scrollTop += replacement.getBoundingClientRect().top - top;
+        following = nearBottom();   // "All" hides the other-slides row and the conversation grows: the answer stays put
         const link = Array.from(replacement.querySelectorAll("button.slide-ref")).find((node) => Number(node.dataset.slide) === request.page);
         link?.focus({ preventScroll: true });
       }
@@ -1261,21 +1277,43 @@
   // ---------- Reply: ask about part of an answer ----------
   // Select part of a finished answer and a Reply button appears by it; the part goes into the chat box as a quote
   // (formulas as their TeX) for the next question.
-  /// The selection, when both its ends lie in the same finished answer.
+  /// The selection, when it starts in a finished answer and ends in the same answer. A triple-click on the answer's last
+  /// paragraph, or a drag that overshoots it, ends on the answer's own Copy row: that counts as the end of the answer.
   function replySelection() {
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || sel.isCollapsed || !String(sel).trim()) return null;
-    const range = sel.getRangeAt(0);
-    const body = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return e ? e.closest(".msg.assistant .body") : null; };
+    let range = sel.getRangeAt(0);
+    const up = (n) => n && (n.nodeType === 1 ? n : n.parentElement);
+    const body = (n) => { const e = up(n); return e ? e.closest(".msg.assistant > .body") : null; };
     const b = body(range.startContainer);
-    if (!b || b !== body(range.endContainer)) return null;
+    if (!b) return null;
     const msg = b.closest(".msg");
     if (!msg || msg.classList.contains("streaming") || !msg.dataset.messageId) return null;
-    return { sel, range, id: msg.dataset.messageId };
+    if (body(range.endContainer) !== b) {
+      const e = up(range.endContainer);
+      if (!e || e.closest(".msg") !== msg) return null;
+      range = range.cloneRange();
+      range.setEnd(b, b.childNodes.length);
+      if (!range.toString().trim()) return null;
+    }
+    return { sel, range, body: b, id: msg.dataset.messageId };
+  }
+  /// The range without what it only touches: an end at the very start of a node (a triple-click ends at the first
+  /// position of the next block, or of a formula's hidden MathML) moves out of it, and so does a start at the very end
+  /// of one, so a block it touches adds nothing (no stray list marker, no formula that was never highlighted).
+  function trimmed(range, body) {
+    const r = range.cloneRange();
+    const blank = (n) => n.nodeType === 3 && !/\S/.test(n.nodeValue);   // the line breaks between blocks
+    const atStart = (n, o) => n.nodeType === 3 ? o === 0 : Array.prototype.slice.call(n.childNodes, 0, o).every(blank);
+    const atEnd = (n, o) => n.nodeType === 3 ? o === n.length : Array.prototype.slice.call(n.childNodes, o).every(blank);
+    while (r.endContainer !== body && body.contains(r.endContainer) && atStart(r.endContainer, r.endOffset)) r.setEndBefore(r.endContainer);
+    while (r.startContainer !== body && body.contains(r.startContainer) && atEnd(r.startContainer, r.startOffset)) r.setStartAfter(r.startContainer);
+    return r;
   }
   /// The selected part as the reader sees it: one line per block, formulas as $…$ / $$…$$ from KaTeX's TeX annotation,
   /// code as written; visuals and buttons left out.
-  function answerText(range) {
+  function answerText(range, body) {
+    range = trimmed(range, body);
     const formula = (k) => {
       const a = k.querySelector('annotation[encoding="application/x-tex"]');
       const t = (a ? a.textContent : k.textContent).trim();
@@ -1286,7 +1324,11 @@
     const inFormula = root && root.closest(".katex");
     if (inFormula) return formula(inFormula);   // a selection inside one formula takes all of it
     let out = "";
-    const br = () => { out = out.replace(/[ \t]+$/, ""); if (out && !out.endsWith("\n")) out += "\n"; };
+    const br = () => {
+      if (/(^|\n)(-|\d+\.) $/.test(out)) return;   // a list marker just written: the item's paragraph goes on its line
+      out = out.replace(/[ \t]+$/, "");
+      if (out && !out.endsWith("\n")) out += "\n";
+    };
     const walk = (node) => {
       for (let ch = node.firstChild; ch; ch = ch.nextSibling) {
         if (!range.intersectsNode(ch)) continue;
@@ -1340,8 +1382,34 @@
     replyBtn.style.left = Math.round(Math.max(lr.left + 6, Math.min(last.right - w + 10, lr.right - w - 6))) + "px";
     replyBtn.style.top = Math.round(Math.max(lr.top + 4, y)) + "px";
   }
+  // A triple-click means whole paragraphs, but WebKit ends that selection at a formula's hidden MathML: in an answer it
+  // is widened to the whole paragraphs (or list items, headings, cells) it starts and ends in, and the highlight
+  // follows, so it shows what Reply quotes.
+  const BLOCK = /^(P|DIV|LI|UL|OL|PRE|H[1-6]|TABLE|THEAD|TBODY|TR|TD|TH|BLOCKQUOTE|DL|DT|DD)$/;
+  function paragraphOf(node, body) {
+    for (let e = node.parentElement; e && e !== body; e = e.parentElement)
+      if (BLOCK.test(e.tagName)) return /^(P|LI|H[1-6]|TD|TH|DT|DD)$/.test(e.tagName) ? e : null;
+    return null;
+  }
+  function wholeParagraphs() {
+    const s = replySelection();
+    if (!s) return;
+    const r = trimmed(s.range, s.body), texts = [];
+    const walker = document.createTreeWalker(s.body, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) if (/\S/.test(t.nodeValue) && r.intersectsNode(t)) texts.push(t);
+    if (!texts.length) return;
+    const first = paragraphOf(texts[0], s.body), last = paragraphOf(texts[texts.length - 1], s.body);
+    if (first && r.comparePoint(first, 0) < 0) r.setStart(first, 0);
+    if (last && r.comparePoint(last, last.childNodes.length) > 0) r.setEnd(last, last.childNodes.length);
+    s.sel.removeAllRanges();
+    s.sel.addRange(r);
+  }
   // After the selection settles (double and triple clicks too).
-  document.addEventListener("mouseup", (e) => { if (e.target !== replyBtn) setTimeout(placeReply, 0); });
+  document.addEventListener("mouseup", (e) => {
+    if (e.target === replyBtn) return;
+    const paragraphs = e.detail >= 3;
+    setTimeout(() => { if (paragraphs) wholeParagraphs(); placeReply(); }, 0);
+  });
   document.addEventListener("keyup", (e) => { if (e.shiftKey) setTimeout(placeReply, 0); });
   document.addEventListener("selectionchange", () => { if (!replyBtn.hidden) placeReply(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideReply(); }, true);
@@ -1353,7 +1421,7 @@
     const s = replySelection();
     hideReply();
     if (!s || !state.hasDeck) return;
-    const text = answerText(s.range);
+    const text = answerText(s.range, s.body);
     if (!text) return;
     post({ type: "quoteReply", messageID: s.id, text });
     s.sel.removeAllRanges();

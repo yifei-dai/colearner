@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import CoLearner
@@ -17,10 +18,10 @@ struct ChatReplyTests {
          ["id": "a3", "role": "assistant", "provider": "codex", "text": "Still writing this", "status": "streaming", "page": 5]]
     }
 
-    private func thread(quote: Any = NSNull()) -> [String: Any] {
+    private func thread(quote: Any = NSNull(), messages: [[String: Any]]? = nil) -> [String: Any] {
         ["hasDeck": true, "deckTitle": "Kinematics", "deckPath": "/tmp/reply-deck.pdf", "page": 5, "pageCount": 30,
          "provider": "claude", "pages": [5], "history": [], "conversation": ["id": "reply-chat"],
-         "area": NSNull(), "messages": messages, "images": [], "quote": quote]
+         "area": NSNull(), "messages": messages ?? self.messages, "images": [], "quote": quote]
     }
 
     private func page() async throws -> ChatWebFixture {
@@ -54,6 +55,58 @@ struct ChatReplyTests {
 
     private func buttonShown(_ web: ChatWebFixture) async throws -> Bool {
         try await web.evaluate("!document.querySelector('#reply-btn').hidden") as? Bool == true
+    }
+
+    /// Clicks Reply and returns the quote it sends.
+    private func reply(_ web: ChatWebFixture) async throws -> String? {
+        web.clearMessages()
+        _ = try await web.evaluate("document.querySelector('#reply-btn').click(); null;")
+        return try await web.waitForMessage(type: "quoteReply")["text"] as? String
+    }
+
+    /// The page in a borderless window that is never shown, so mouse events reach WebKit the way AppKit hands them over
+    /// and a triple-click selects what a real one does.
+    private func windowed(_ web: ChatWebFixture) -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: -12000, y: -12000, width: 520, height: 820), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        web.webView.frame = NSRect(x: 0, y: 0, width: 520, height: 820)
+        window.contentView = web.webView
+        return window
+    }
+
+    /// Triple-clicks the first letter of `word` in `selector` (outside formulas), then waits for the page to handle it.
+    private func tripleClick(_ word: String, in selector: String, _ web: ChatWebFixture, _ window: NSWindow) async throws {
+        let at = try #require(try await web.evaluate("""
+        (function () {
+          getSelection().removeAllRanges();
+          document.querySelector('#reply-btn').hidden = true;
+          if (!window.countingMouseUps) { window.countingMouseUps = true; document.addEventListener('mouseup', () => { window.mouseUps++; }); }
+          window.mouseUps = 0;
+          const e = document.querySelector(\(json(selector)));
+          e.scrollIntoView({ block: 'center' });
+          const w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+          let t;
+          while ((t = w.nextNode()) && (t.nodeValue.indexOf(\(json(word))) < 0 || t.parentElement.closest('.katex')));
+          const i = t.nodeValue.indexOf(\(json(word))), r = document.createRange();
+          r.setStart(t, i); r.setEnd(t, i + 1);
+          const b = r.getBoundingClientRect();
+          return [b.left + b.width / 2, (b.top + b.bottom) / 2];
+        })()
+        """) as? [Double])
+        let point = NSPoint(x: at[0], y: Double(web.webView.bounds.height) - at[1])
+        for clicks in 1...3 {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks,
+                    pressure: type == .leftMouseDown ? 1 : 0))
+                if type == .leftMouseDown { web.webView.mouseDown(with: event) } else { web.webView.mouseUp(with: event) }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+        }
+        try await web.waitFor("window.mouseUps === 3")
+        try await Task.sleep(for: .milliseconds(100))   // the page reads the selection after the mouseup
     }
 
     @Test func replyQuotesThePartOfAnAnswerWithItsTeX() async throws {
@@ -120,6 +173,102 @@ struct ChatReplyTests {
         #expect(try await buttonShown(web))
         try await web.call("setThread", thread().merging(["conversation": ["id": "other-chat"]]) { $1 })
         try await web.waitFor("document.querySelector('#reply-btn').hidden")
+        #expect(web.javaScriptErrors.isEmpty)
+    }
+
+    @Test func aSelectionQuotesOnlyWhatItCovers() async throws {
+        let web = ChatWebFixture()
+        defer { web.close() }
+        try await web.load()
+        let loose = "Three steps:\n\n1. Write the rotation as $R = R_z(\\theta)$.\n\n2. Multiply on the right for the current frame.\n\n"
+            + "3. Check that $\\det R = 1$.\n\nDone."
+        try await web.call("setThread", thread(messages: [messages[0], messages[1],
+            ["id": "a5", "role": "assistant", "provider": "claude", "text": loose, "status": "done", "page": 5]]))
+        try await web.waitFor("document.querySelectorAll('.msg').length === 3 && !!document.querySelector('[data-message-id=a5] li .katex')")
+        // `setup` sets the ends of r, as WebKit leaves them after a triple-click or a drag that overshoots.
+        func quote(_ setup: String) async throws -> String? {
+            _ = try await web.evaluate("""
+            (function () {
+              const a1 = document.querySelector('[data-message-id=a1] .body'), a5 = document.querySelector('[data-message-id=a5] .body');
+              const text = (e, word) => { const w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT); let t;
+                while ((t = w.nextNode()) && (t.nodeValue.indexOf(word) < 0 || t.parentElement.closest('.katex'))); return t; };
+              const r = document.createRange();
+              \(setup)
+              const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+              document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+              return null;
+            })()
+            """)
+            try await Task.sleep(for: .milliseconds(60))
+            guard try await buttonShown(web) else { return nil }
+            return try await reply(web)
+        }
+        // Ending at the very start of the next item or of a display formula's MathML: nothing of it.
+        #expect(try await quote("r.setStart(text(a1, 'columns'), 0); r.setEnd(a1.querySelectorAll('li')[1], 0);")
+                == "- columns are orthonormal")
+        #expect(try await quote("r.setStart(text(a1, 'So'), 0); r.setEnd(a1.querySelector('.katex-display .katex-mathml mi'), 0);")
+                == "So")
+        // Starting at the very end of an item: not its marker.
+        #expect(try await quote("r.setStart(text(a1, 'columns'), 'columns are orthonormal'.length); r.setEnd(a1.querySelectorAll('li')[1], 1);")
+                == "- $\\det R = 1$")
+        // Ending on the answer's Copy row: up to the end of the answer, without "Copy".
+        #expect(try await quote("r.setStart(text(a1, 'See'), 0); r.setEnd(document.querySelector('[data-message-id=a1] .tools button').firstChild, 4);")
+                == "See slide 12.")
+        #expect(try await quote("r.setStart(text(a1, 'The'), 0); r.setEnd(document.querySelector('[data-message-id=a1] .tools button'), 0);")
+                == "The takeaway: $R^\\top R = I$ for any rotation.\nSo\n$$R^{-1} = R^\\top$$\n- columns are orthonormal\n- $\\det R = 1$\nSee slide 12.")
+        // A loose list (each item a paragraph): the marker stays on the item's line.
+        #expect(try await quote("r.setStart(text(a5, 'Write'), 0); r.setEnd(text(a5, 'Check').parentElement.lastChild, 1);")
+                == "1. Write the rotation as $R = R_z(\\theta)$.\n2. Multiply on the right for the current frame.\n3. Check that $\\det R = 1$.")
+        #expect(try await quote("r.setStart(text(a5, 'Three'), 0); r.setEnd(text(a5, 'Done'), 5);")
+                == "Three steps:\n1. Write the rotation as $R = R_z(\\theta)$.\n2. Multiply on the right for the current frame.\n"
+                + "3. Check that $\\det R = 1$.\nDone.")
+        #expect(web.javaScriptErrors.isEmpty)
+    }
+
+    // MARK: real triple-clicks
+
+    @Test func aTripleClickOnAnAnswersLastParagraphOffersReplyWithoutTheCopyRow() async throws {
+        let web = ChatWebFixture()
+        let window = windowed(web)
+        defer { web.close(); window.contentView = nil; window.close() }
+        try await web.load()
+        let one = "Rotations compose by multiplying their matrices."
+        try await web.call("setThread", thread(messages: [messages[0], messages[1],
+            ["id": "a4", "role": "assistant", "provider": "codex", "text": one, "status": "done", "page": 5]]))
+        try await web.waitFor("document.querySelectorAll('.msg').length === 3 && !!document.querySelector('.katex-display')")
+        // WebKit ends both selections on the answer's own Copy button.
+        for (word, selector, quote) in [("See", ".msg[data-message-id=a1] .body > p:last-child", "See slide 12."),
+                                        ("Rotations", ".msg[data-message-id=a4] .body", one)] {
+            try await tripleClick(word, in: selector, web, window)
+            #expect(try await buttonShown(web), "no Reply after a triple-click on “\(word)”")
+            #expect(try await web.evaluate("String(getSelection()).includes('Copy')") as? Bool == false)
+            #expect(try await reply(web) == quote)
+        }
+        #expect(web.javaScriptErrors.isEmpty)
+    }
+
+    @Test func aTripleClickRepliesWithThatParagraph() async throws {
+        let web = ChatWebFixture()
+        let window = windowed(web)
+        defer { web.close(); window.contentView = nil; window.close() }
+        try await web.load()
+        try await web.call("setThread", thread())
+        try await web.waitFor("document.querySelectorAll('.msg').length === 4 && !!document.querySelector('.katex-display')")
+        let a1 = ".msg[data-message-id=a1] .body"
+        let takeaway = "The takeaway: $R^\\top R = I$ for any rotation."
+        // A list item without the next item's marker; the line before a display formula without the formula; a paragraph
+        // with inline math, clicked before or after the formula, all of it (WebKit alone stops at the formula's MathML).
+        for (word, selector, quote) in [("columns", "\(a1) li", "- columns are orthonormal"),
+                                        ("So", "\(a1) > p:nth-of-type(2)", "So"),
+                                        ("The", "\(a1) > p", takeaway),
+                                        ("rotation", "\(a1) > p", takeaway)] {
+            try await tripleClick(word, in: selector, web, window)
+            #expect(try await buttonShown(web), "no Reply after a triple-click on “\(word)”")
+            if quote == takeaway {   // the highlight shows the whole paragraph too
+                #expect(try await web.evaluate("(s => s.startsWith('The takeaway') && s.includes('for any rotation.'))(String(getSelection()))") as? Bool == true)
+            }
+            #expect(try await reply(web) == quote, "triple-click on “\(word)”")
+        }
         #expect(web.javaScriptErrors.isEmpty)
     }
 
