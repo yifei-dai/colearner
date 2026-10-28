@@ -698,7 +698,7 @@ struct ChatAttachmentUITests {
 @MainActor
 struct ChatPasteTests {
     @Test func pasteGoesToThePicturesFirstAndPasteStaysAvailable() {
-        let view = ChatWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let view = PasteWebView(frame: .zero, configuration: WKWebViewConfiguration())
         var asked = 0
         view.pastePictures = { asked += 1; return true }
         view.paste(nil)

@@ -164,6 +164,12 @@ final class AppModel: ObservableObject {
             guard let self, self.walk.loadedPath == self.currentStudyPage?.path else { return }
             self.ask(quote: q)
         }
+        // ⌘V on a study page with a picture on the clipboard: the picture goes to the chat (text pastes into the page).
+        (w.webView as? PasteWebView)?.pastePictures = { [weak self] in
+            guard let self, self.chat.pasteImages() else { return false }
+            self.showChatForQuestion()
+            return true
+        }
         return w
     }()
     lazy var studyPDF = StudyPDFController()

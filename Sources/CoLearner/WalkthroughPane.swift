@@ -23,7 +23,7 @@ final class WalkthroughController: NSObject, ObservableObject, WKNavigationDeleg
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         Self.installPageScripts(in: config.userContentController)
-        self.init(webView: WKWebView(frame: .zero, configuration: config))
+        self.init(webView: PasteWebView(frame: .zero, configuration: config))
     }
 
     /// What runs inside every study page once it has loaded (main frame only): the section indexer, the arrow keys,

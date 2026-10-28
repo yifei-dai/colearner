@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
+import WebKit
 
 /// A picture waiting in the chat box (a screenshot, an image file, part of the walkthrough). It goes with the next
 /// question: an image file the assistants get, plus a small preview for the chat.
@@ -153,5 +154,28 @@ enum ImageAttachments {
                 }
             }
         }
+    }
+}
+
+/// A web view (the chat page, a study page) whose Paste (⌘V, Edit › Paste) with a picture on the clipboard attaches
+/// the picture to the chat instead of handing the paste to the page; text pastes into the page as usual. macOS lets an
+/// app read the clipboard without asking only inside such a paste, so this is where the reading happens.
+final class PasteWebView: WKWebView {
+    /// Attaches the clipboard's pictures, if there are any; false hands the paste to the page.
+    var pastePictures: () -> Bool = { false }
+    private static let pasteAction = #selector(NSText.paste(_:))
+
+    @objc func paste(_ sender: Any?) {
+        if pastePictures() { return }
+        // WebKit's own paste (WKWebView implements paste: without declaring it).
+        typealias Paste = @convention(c) (AnyObject, Selector, Any?) -> Void
+        guard WKWebView.instancesRespond(to: Self.pasteAction),
+              let imp = class_getMethodImplementation(WKWebView.self, Self.pasteAction) else { return }
+        unsafeBitCast(imp, to: Paste.self)(self, Self.pasteAction, sender)
+    }
+
+    /// A picture can be pasted with no text box in focus, so Paste stays available.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        item.action == Self.pasteAction || super.validateUserInterfaceItem(item)
     }
 }
