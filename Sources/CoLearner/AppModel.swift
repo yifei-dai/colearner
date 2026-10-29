@@ -601,7 +601,7 @@ final class AppModel: ObservableObject {
                 ask(quote: q)
             } else if let shot = studyPDF.pageImage() {
                 chat.addImage(cgImage: shot.image, label: "Notes p. \(shot.page)",
-                              detail: "page \(shot.page) of the typed notes “\(page.title)”")
+                              detail: "page \(shot.page) of the typed notes “\(page.title)”", fromNotes: true)
                 showChatForQuestion()
             } else {
                 NSSound.beep()
@@ -658,7 +658,7 @@ final class AppModel: ObservableObject {
             guard content === studyPDF.view, studyPDF.path == page.path, let area = overlay.pdfArea(r, in: studyPDF.view),
                   let shot = studyPDF.areaImage(page: area.page, rect: area.rect) else { return }
             chat.addImage(cgImage: shot.image, label: "Notes p. \(shot.page)",
-                          detail: "a capture of part of page \(shot.page) of the typed notes “\(page.title)”")
+                          detail: "a capture of part of page \(shot.page) of the typed notes “\(page.title)”", fromNotes: true)
             showChatForQuestion()
             return
         }
