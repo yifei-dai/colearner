@@ -94,12 +94,23 @@
   }
 
   // ---------- rendering ----------
+  // Whether the conversation follows its end: near the bottom when it last scrolled up, or back at it since. A taller
+  // chat box (a quote, pictures, which take their width only once loaded, the area, a longer question) or a shorter
+  // window shortens the conversation without scrolling it, so one that was following is pinned again. Only a scroll up
+  // stops it: the scroll event of the last pin can arrive after the chat box grew.
+  let following = true, lastTop = 0;
   function nearBottom() {
     return log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   }
   function toBottom() {
     log.scrollTop = log.scrollHeight;
+    following = true;
   }
+  log.addEventListener("scroll", () => {
+    following = log.scrollTop < lastTop ? nearBottom() : following || nearBottom();
+    lastTop = log.scrollTop;
+  }, { passive: true });
+  new ResizeObserver(() => { if (following) toBottom(); }).observe(log);
 
   // Busy = an assistant you are about to ask is still answering. In Both mode Claude usually finishes
   // first; a follow-up to Claude alone shouldn't have to wait for ChatGPT.
@@ -246,7 +257,35 @@
       const xs = Array.from(box.querySelectorAll(".att-x"));
       (xs.find((x) => x.dataset.key === focusKey) || xs[Math.min(at, xs.length - 1)] || input).focus();
     }
+    fitLog();
   }
+  /// While something waits it gives way first and scrolls (chat.css): the conversation keeps a quarter of the window, but
+  /// not at the cost of the chat box's own rows (chips, area, question box, buttons, status line); where both don't fit,
+  /// it gets what the rows leave. A window under 520 px has no room for a quarter and what waits: there the conversation
+  /// gets what the whole chat box leaves, as before.
+  function fitLog() {
+    const box = $("#attachbox"), composer = $("#composer");
+    let min = 0;
+    if (!box.hidden && innerHeight >= 520) {
+      const c = getComputedStyle(composer);
+      const rows = $("#status").getBoundingClientRect().bottom - $("#quick").getBoundingClientRect().top - box.getBoundingClientRect().height
+        + parseFloat(c.paddingTop) + parseFloat(c.paddingBottom) + parseFloat(c.borderTopWidth);
+      const room = composer.getBoundingClientRect().bottom - log.getBoundingClientRect().top;
+      min = Math.max(0, Math.min(innerHeight / 4, Math.floor(room - rows)));
+    }
+    const px = min ? min + "px" : "";
+    if (log.style.minHeight !== px) log.style.minHeight = px;
+  }
+  // Measured again when the window or a row changes size (a longer question, the area, a note, the other-slides row);
+  // a row's change on the next frame, since resizing the conversation inside the observer would be a resize loop.
+  let fitQueued = false;
+  const rowsObserver = new ResizeObserver(() => {
+    if (fitQueued) return;
+    fitQueued = true;
+    requestAnimationFrame(() => { fitQueued = false; fitLog(); });
+  });
+  for (const s of ["#head", "#others", "#quick", "#areabox", "#inputwrap", "#bar", "#note", "#status"]) rowsObserver.observe($(s));
+  window.addEventListener("resize", fitLog);
   /// Pictures the app is still decoding (dropped, pasted or chosen a moment ago).
   function preparing() { return Number.isInteger(state.processing) && state.processing > 0 ? state.processing : 0; }
   function removeButton(title, label, onclick, key) {
@@ -415,6 +454,7 @@
       target.tabIndex = -1;
       target.focus({ preventScroll: true });
       target.scrollIntoView({ block: "center", behavior: "auto" });
+      following = nearBottom();   // stays on the found message when the chat box changes too
     });
     highlightTimer = setTimeout(() => {
       if (highlightedMessageID !== id) return;
@@ -807,6 +847,8 @@
         post({ type: "openLink", url: a.getAttribute("href") });
       });
     }
+    // Dragging a picture in an answer would bring up the drop layer and attach it.
+    for (const img of bodyEl.querySelectorAll("img")) img.draggable = false;
   }
 
   // A passage quoted in a question: about six lines, and the rest on click when there is more (selecting text to copy
@@ -1072,8 +1114,9 @@
   function send(text, action) {
     if (!state.hasDeck) return;
     if (busy()) return;
-    // An empty box with an area, a quote or pictures waiting: Enter or Send asks to explain them.
-    if (!action && !text.trim() && (state.area || quoted() || pics().length)) action = "explain";
+    // An empty box with an area, a quote or pictures waiting (or one still being prepared): Enter or Send asks to
+    // explain them.
+    if (!action && !text.trim() && (state.area || quoted() || pics().length || preparing())) action = "explain";
     const q = action ? quick(action) : null;
     const prompt = q ? q.prompt : text.trim();
     if (!prompt) return;
@@ -1121,6 +1164,7 @@
       const replacement = id && elById.get(id);
       if (replacement && top != null) {
         log.scrollTop += replacement.getBoundingClientRect().top - top;
+        following = nearBottom();   // "All" hides the other-slides row and the conversation grows: the answer stays put
         const link = Array.from(replacement.querySelectorAll("button.slide-ref")).find((node) => Number(node.dataset.slide) === request.page);
         link?.focus({ preventScroll: true });
       }
@@ -1261,17 +1305,43 @@
   // ---------- Reply: ask about part of an answer ----------
   // Select part of a finished answer and a Reply button appears by it; the part goes into the chat box as a quote
   // (formulas as their TeX) for the next question.
-  /// The selection, when both its ends lie in the same finished answer.
+  /// The selection, when it starts in a finished answer and ends in the same answer, as the part of the answer it
+  /// highlights (see trimmed). A triple-click on the answer's last paragraph, or a drag that overshoots it, ends on the
+  /// answer's own Copy row: that counts as the end of the answer.
   function replySelection() {
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || sel.isCollapsed || !String(sel).trim()) return null;
-    const range = sel.getRangeAt(0);
-    const body = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return e ? e.closest(".msg.assistant .body") : null; };
+    let range = sel.getRangeAt(0);
+    const up = (n) => n && (n.nodeType === 1 ? n : n.parentElement);
+    const body = (n) => { const e = up(n); return e ? e.closest(".msg.assistant > .body") : null; };
     const b = body(range.startContainer);
-    if (!b || b !== body(range.endContainer)) return null;
+    if (!b) return null;
     const msg = b.closest(".msg");
     if (!msg || msg.classList.contains("streaming") || !msg.dataset.messageId) return null;
-    return { sel, range, id: msg.dataset.messageId };
+    if (body(range.endContainer) !== b) {
+      const e = up(range.endContainer);
+      if (!e || e.closest(".msg") !== msg) return null;
+      range = range.cloneRange();
+      range.setEnd(b, b.childNodes.length);
+    }
+    range = trimmed(range, b);
+    if (!range.toString().trim()) return null;   // it only touches a block or formula: nothing of the answer is highlighted
+    return { sel, range, body: b, id: msg.dataset.messageId };
+  }
+  /// The range without what it only touches: an end at the very start of a node moves out of it, and so does a start at
+  /// the very end of one, so a block or formula it touches adds nothing (no stray list marker, no formula that was never
+  /// highlighted). A triple-click ends at the first position of the next block or of a formula's hidden MathML; a drag
+  /// that stops by a formula ends at the first position of the formula as shown, after the MathML and an empty strut.
+  function trimmed(range, body) {
+    const r = range.cloneRange();
+    // what the reader does not see: the line breaks between blocks, a formula's hidden MathML and its empty struts
+    const blank = (n) => n.nodeType === 3 ? !/\S/.test(n.nodeValue)
+      : n.nodeType === 1 && (n.classList.contains("katex-mathml") || (n.tagName === "SPAN" && !n.firstChild));
+    const atStart = (n, o) => n.nodeType === 3 ? o === 0 : Array.prototype.slice.call(n.childNodes, 0, o).every(blank);
+    const atEnd = (n, o) => n.nodeType === 3 ? o === n.length : Array.prototype.slice.call(n.childNodes, o).every(blank);
+    while (r.endContainer !== body && body.contains(r.endContainer) && atStart(r.endContainer, r.endOffset)) r.setEndBefore(r.endContainer);
+    while (r.startContainer !== body && body.contains(r.startContainer) && atEnd(r.startContainer, r.startOffset)) r.setStartAfter(r.startContainer);
+    return r;
   }
   /// The selected part as the reader sees it: one line per block, formulas as $…$ / $$…$$ from KaTeX's TeX annotation,
   /// code as written; visuals and buttons left out.
@@ -1286,7 +1356,11 @@
     const inFormula = root && root.closest(".katex");
     if (inFormula) return formula(inFormula);   // a selection inside one formula takes all of it
     let out = "";
-    const br = () => { out = out.replace(/[ \t]+$/, ""); if (out && !out.endsWith("\n")) out += "\n"; };
+    const br = () => {
+      if (/(^|\n)(-|\d+\.) $/.test(out)) return;   // a list marker just written: the item's paragraph goes on its line
+      out = out.replace(/[ \t]+$/, "");
+      if (out && !out.endsWith("\n")) out += "\n";
+    };
     const walk = (node) => {
       for (let ch = node.firstChild; ch; ch = ch.nextSibling) {
         if (!range.intersectsNode(ch)) continue;
@@ -1340,8 +1414,57 @@
     replyBtn.style.left = Math.round(Math.max(lr.left + 6, Math.min(last.right - w + 10, lr.right - w - 6))) + "px";
     replyBtn.style.top = Math.round(Math.max(lr.top + 4, y)) + "px";
   }
+  // A triple-click selects a paragraph as WebKit sees it, which a line break, a nested list or a display formula also
+  // ends, but WebKit stops it at a formula's hidden MathML. An end it left at a formula moves on to the end of that
+  // paragraph, within its P (or list item, heading, cell), and the highlight follows, so it shows what Reply quotes.
+  const BLOCK = /^(P|DIV|LI|UL|OL|PRE|H[1-6]|TABLE|THEAD|TBODY|TR|TD|TH|BLOCKQUOTE|DL|DT|DD)$/;
+  function paragraphOf(node, body) {
+    for (let e = node.parentElement; e && e !== body; e = e.parentElement)
+      if (BLOCK.test(e.tagName)) return /^(P|LI|H[1-6]|TD|TH|DT|DD)$/.test(e.tagName) ? e : null;
+    return null;
+  }
+  function wholeParagraphs() {
+    const s = replySelection();
+    if (!s) return;
+    const raw = s.sel.getRangeAt(0), r = s.range, texts = [];
+    const walker = document.createTreeWalker(s.body, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) if (/\S/.test(t.nodeValue) && r.intersectsNode(t)) texts.push(t);
+    if (!texts.length) return;
+    const first = paragraphOf(texts[0], s.body), last = paragraphOf(texts[texts.length - 1], s.body);
+    const atFormula = (n) => { const e = n.nodeType === 1 ? n : n.parentElement; return !!(e && e.closest(".katex")); };
+    // what ends WebKit's paragraph inside a P or list item: a line break, a nested block, a display formula
+    const ends = (n) => n.nodeType === 1 && (BLOCK.test(n.tagName) || n.tagName === "BR" || n.classList.contains("katex-display"));
+    // The nearest of those before (back) or after text t in p, also a line break inside bold or a link; or the display
+    // formula t is in (inside: its line is the formula itself).
+    const lineEnd = (t, p, back) => {
+      const step = (n) => back ? n.previousSibling : n.nextSibling;
+      for (let n = t; n !== p; n = n.parentNode) {
+        if (n !== t && ends(n)) return { node: n, inside: true };
+        for (let sib = step(n); sib; sib = step(sib)) {
+          if (ends(sib)) return { node: sib };
+          const brs = sib.nodeType === 1 ? sib.querySelectorAll("br") : [];
+          if (brs.length) return { node: brs[back ? brs.length - 1 : 0] };
+        }
+      }
+      return null;
+    };
+    if (first && atFormula(raw.startContainer) && r.comparePoint(first, 0) < 0) {
+      const e = lineEnd(texts[0], first, true);   // back to the start of the first text's line
+      if (!e) r.setStart(first, 0); else if (e.inside) r.setStartBefore(e.node); else r.setStartAfter(e.node);
+    }
+    if (last && atFormula(raw.endContainer) && r.comparePoint(last, last.childNodes.length) > 0) {
+      const e = lineEnd(texts[texts.length - 1], last, false);   // on to the end of the last text's line
+      if (!e) r.setEnd(last, last.childNodes.length); else if (e.inside) r.setEndAfter(e.node); else r.setEndBefore(e.node);
+    }
+    s.sel.removeAllRanges();
+    s.sel.addRange(r);
+  }
   // After the selection settles (double and triple clicks too).
-  document.addEventListener("mouseup", (e) => { if (e.target !== replyBtn) setTimeout(placeReply, 0); });
+  document.addEventListener("mouseup", (e) => {
+    if (e.target === replyBtn) return;
+    const paragraphs = e.detail >= 3;
+    setTimeout(() => { if (paragraphs) wholeParagraphs(); placeReply(); }, 0);
+  });
   document.addEventListener("keyup", (e) => { if (e.shiftKey) setTimeout(placeReply, 0); });
   document.addEventListener("selectionchange", () => { if (!replyBtn.hidden) placeReply(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideReply(); }, true);

@@ -313,6 +313,15 @@ struct ChatAttachmentUITests {
         try await web.call("setAttachments", ["images": [], "quote": NSNull(), "processing": 1])
         #expect(try await flag("!document.querySelector('#attachbox').hidden", in: web))
         #expect(try await text(".att-wait", in: web) == "Preparing a picture…")
+        // Enter on the empty box (Explain the picture just pasted) waits too, and says so.
+        web.clearMessages()
+        _ = try await web.evaluate("""
+            { document.querySelector('#note').textContent = ''; const i = document.querySelector('#input'); i.value = '';
+              i.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true})); } null;
+            """)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(posts("send", in: web).isEmpty)
+        #expect(try await text("#note", in: web) == "A picture is still being prepared. Send again in a moment.")
     }
 
     @Test func keyboardFocusStaysOnTheSameRemoveButtonWhenAPictureArrives() async throws {
@@ -334,10 +343,57 @@ struct ChatAttachmentUITests {
         defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
         try await web.load()
         let messages: [[String: Any]] = [["id": "q", "role": "user", "page": 4, "text": "These?", "status": "done",
-                                          "areaThumb": picture(), "images": [["label": "one.png", "thumb": picture()]]]]
+                                          "areaThumb": picture(), "images": [["label": "one.png", "thumb": picture()]]],
+                                         ["id": "a", "role": "assistant", "provider": "claude", "page": 4, "status": "done",
+                                          "text": "Like this one: ![sketch](\(picture()))"]]
         try await web.call("setThread", thread(images: [image("a", "one.png")], area: ["page": 4, "thumb": picture()], messages: messages))
-        #expect(try await flag("Array.from(document.querySelectorAll('#attachbox img, .bubble img')).length === 3", in: web))
-        #expect(try await flag("Array.from(document.querySelectorAll('#attachbox img, .bubble img')).every(i => i.draggable === false)", in: web))
+        // The area box, the waiting pictures, the questions' pictures and pictures in answers.
+        let images = "Array.from(document.querySelectorAll('#areabox img, #attachbox img, .bubble img, .msg.assistant .body img'))"
+        #expect(try await flag("\(images).length === 5", in: web))
+        #expect(try await flag("\(images).every(i => i.draggable === false)", in: web))
+    }
+
+    @Test func aStreamingAnswerIsStillFollowedWhenSomethingIsAttached() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        web.webView.frame.size = NSSize(width: 420, height: 760)
+        try await web.load()
+        let earlier = (1...40).map { "Line \($0) of an earlier answer about rotations." }.joined(separator: "\n\n")
+        var paragraphs = ["The answer starts."]
+        func answer() -> [String: Any] {
+            ["id": "a2", "role": "assistant", "provider": "claude", "page": 4, "status": "streaming", "text": paragraphs.joined(separator: "\n\n")]
+        }
+        try await web.call("setThread", thread(messages: [
+            ["id": "q1", "role": "user", "page": 4, "text": "Why?", "status": "done"],
+            ["id": "a1", "role": "assistant", "provider": "claude", "page": 4, "text": earlier, "status": "done"],
+            ["id": "q2", "role": "user", "page": 4, "text": "And then?", "status": "done"], answer()]))
+        func stream() async throws {
+            paragraphs.append("More of the answer arrives.")
+            try await web.call("upsertMessage", answer())
+            try await web.waitFor("document.querySelectorAll('[data-message-id=a2] .body p').length === \(paragraphs.count)")
+        }
+        /// At the end of the conversation once the page has caught up (it pins the conversation when it next draws).
+        func atEnd() async -> Bool {
+            (try? await web.waitFor("(l => l.scrollHeight - l.scrollTop - l.clientHeight < 1)(document.querySelector('#log'))")) != nil
+        }
+        try await stream()
+        #expect(await atEnd())
+        // A three-line quote (Reply, ⇧⌘L), then two rows of pictures (they widen as they load), while the answer streams.
+        var quote = walkthroughQuote
+        quote["text"] = String(repeating: "Rotations about the current frame multiply on the right. ", count: 6)
+        try await web.call("setAttachments", ["images": [], "quote": quote])
+        for _ in 0..<3 { try await stream() }
+        #expect(await atEnd(), "stopped following after a quote")
+        try await web.call("setAttachments", ["images": (1...4).map { image("p\($0)", "Screenshot \($0).png") }, "quote": quote])
+        for _ in 0..<3 { try await stream() }
+        #expect(await atEnd(), "stopped following after pictures")
+        // Scrolled up to read: it stays where it was.
+        _ = try await web.evaluate("document.querySelector('#log').scrollTop = 200; null;")
+        try await Task.sleep(for: .milliseconds(50))
+        try await web.call("setAttachments", ["images": [], "quote": NSNull()])
+        try await stream()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await web.evaluate("document.querySelector('#log').scrollTop") as? Double == 200)
     }
 
     @Test func theAppLearnsWhenTheSearchBoxIsOpen() async throws {
@@ -689,6 +745,118 @@ struct ChatAttachmentUITests {
                 try await web.snapshot(to: URL(fileURLWithPath: "/tmp/colearner-v019-attachments.png"))
             }
         }
+    }
+
+    /// Stop and the status line on screen, and the chat box's own rows whole: the first (the chips) not cut off at the top.
+    private let chatBoxWhole = """
+        (() => { const r = (s) => document.querySelector(s).getBoundingClientRect(), c = r('#composer');
+                 return r('#quick').top >= c.top + 8.5 && ['#btn-send', '#usage'].every(s => { const b = r(s);
+                   return b.height > 0 && b.top >= 0 && b.bottom <= innerHeight; }); })()
+        """
+
+    /// The page with both assistants' model pickers in the bar, as in the app (they wrap it to two rows at 340 px).
+    private func shortChat(_ web: ChatWebFixture) async throws {
+        try await web.load()
+        let efforts = [["id": "medium", "label": "Medium"], ["id": "high", "label": "High"]]
+        try await web.call("setConfig", [
+            "claude": ["models": [["id": "opus", "label": "Opus 5.5"]], "model": "opus", "efforts": efforts, "effort": "medium"],
+            "codex": ["models": [["id": "gpt", "label": "GPT-6 Astra"]], "model": "gpt", "efforts": efforts, "effort": "high"],
+        ])
+    }
+
+    /// A question and its answer still streaming (Send reads Stop).
+    private let streaming: [[String: Any]] = [["id": "q", "role": "user", "page": 4, "text": "Why?", "status": "done"],
+                                              ["id": "a", "role": "assistant", "provider": "claude", "page": 4, "text": "So far", "status": "streaming"]]
+
+    @Test func waitingAttachmentsGiveWayInAShortNarrowChat() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await shortChat(web)
+        let area: [String: Any] = ["page": 4, "thumb": picture(width: 240, height: 120, hue: 0.8)]
+        // (width, height, provider, pictures), each with an area and a walkthrough quote while an answer streams.
+        for (width, height, provider, count) in [(340.0, 600.0, "both", 2), (420.0, 700.0, "claude", 8)] {
+            web.webView.frame.size = NSSize(width: width, height: height)
+            var t = thread(images: (1...count).map { image("p\($0)", "Screenshot 2026-10-28 at 9.4\($0).07 AM.png") },
+                           quote: walkthroughQuote, area: area, messages: streaming)
+            t["provider"] = provider
+            try await web.call("setThread", t)
+            try await web.waitFor("window.innerWidth === \(Int(width)) && window.innerHeight === \(Int(height))")
+            let size = "\(Int(width))×\(Int(height))"
+            #expect(try await text("#btn-send", in: web) == "Stop")
+            // Stop, the status line and the rest of the chat box stay on screen, the conversation keeps a quarter of the window,
+            #expect(try await flag(chatBoxWhole, in: web), "chat box cut off at \(size)")
+            #expect(try await flag("document.querySelector('#log').getBoundingClientRect().height >= innerHeight / 4 - 0.5", in: web),
+                    "conversation squeezed at \(size)")
+            // and the pictures and the quote scroll instead.
+            #expect(try await flag("(b => b.clientHeight > 0 && b.scrollHeight > b.clientHeight)(document.querySelector('#attachbox'))", in: web),
+                    "nothing gave way at \(size)")
+        }
+    }
+
+    @Test func theChatBoxStaysWholeWhereAQuarterForTheConversationDoesNotFit() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await shortChat(web)
+        let box = "document.querySelector('#attachbox')"
+        // Under 520 px there is no room for a quarter and what waits: as before, one picture shows whole and a quote's
+        // card at least down to its ✕ (it scrolls), next to all of the chat box.
+        for (height, provider, images, quote) in [(450.0, "both", 1, false), (420.0, "claude", 0, true)] {
+            web.webView.frame.size = NSSize(width: 340, height: height)
+            var t = thread(images: (0..<images).map { image("p\($0)", "Screenshot 2026-10-28 at 9.4\($0).07 AM.png") },
+                           quote: quote ? walkthroughQuote : NSNull(), messages: streaming)
+            t["provider"] = provider
+            try await web.call("setThread", t)
+            try await web.waitFor("window.innerWidth === 340 && window.innerHeight === \(Int(height))")
+            #expect(try await flag(chatBoxWhole, in: web), "chat box cut off at 340×\(Int(height))")
+            #expect(try await flag(quote
+                ? "(b => { const x = document.querySelector('.att-quote .att-x').getBoundingClientRect(); return x.top >= b.top && x.bottom <= b.bottom; })(\(box).getBoundingClientRect())"
+                : "(b => b.clientHeight > 0 && b.scrollHeight <= b.clientHeight)(\(box))", in: web), "what waits is hidden at 340×\(Int(height))")
+        }
+        // Taller, where the chat box's rows and a quarter for the conversation don't both fit, the conversation gives way
+        // to the rows, never the top of the chat box: with the other-slides row up (the decided load, 33 px less room),
+        let log = "document.querySelector('#log').getBoundingClientRect().height"
+        let atEnd = "(l => l.scrollHeight - l.scrollTop - l.clientHeight < 1)(document.querySelector('#log'))"
+        let earlier = (1...30).map { "Line \($0) of an earlier answer." }.joined(separator: "\n\n")
+        web.webView.frame.size = NSSize(width: 340, height: 700)
+        var t = thread(images: [image("p1", "Screenshot 1.png"), image("p2", "Screenshot 2.png")], quote: walkthroughQuote,
+                       area: ["page": 4, "thumb": picture(width: 240, height: 120, hue: 0.8)],
+                       messages: [["id": "a0", "role": "assistant", "provider": "claude", "page": 4, "text": earlier, "status": "done"]] + streaming)
+        t["provider"] = "both"
+        t["pages"] = [3, 4, 7]
+        try await web.call("setThread", t)
+        try await web.waitFor("window.innerHeight === 700 && !document.querySelector('#others').hidden && document.querySelector('#area-img').complete")
+        #expect(try await flag("\(log) >= innerHeight / 4 - 0.5", in: web))
+        web.webView.frame.size = NSSize(width: 340, height: 600)
+        try await web.waitFor("window.innerHeight === 600")
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await flag(chatBoxWhole, in: web), "chat box cut off with the other-slides row")
+        #expect(try await flag("\(log) >= innerHeight / 5", in: web))
+        // Measuring again (a note shows, the window says it resized) leaves the conversation where it was, at its end.
+        #expect(try await flag(atEnd, in: web))
+        try await web.call("showNote", ["text": "Only pictures can be attached.", "error": false])
+        _ = try await web.evaluate("window.dispatchEvent(new Event('resize')); null;")
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(try await flag("\(chatBoxWhole) && \(atEnd)", in: web), "measuring the chat box moved the conversation")
+        // and with a long question typed.
+        web.webView.frame.size = NSSize(width: 340, height: 650)
+        t["images"] = [image("p1", "Screenshot 1.png")]
+        t["quote"] = NSNull()
+        t["pages"] = [4]
+        try await web.call("setThread", t)
+        try await web.waitFor("window.innerHeight === 650 && document.querySelector('#others').hidden")
+        #expect(try await flag("\(chatBoxWhole) && \(log) >= innerHeight / 4 - 0.5", in: web))
+        _ = try await web.evaluate("""
+            { const i = document.querySelector('#input'); i.value = Array(10).fill('a line of the question').join('\\n');
+              i.dispatchEvent(new Event('input')); } null;
+            """)
+        try await web.waitFor("document.querySelector('#input').offsetHeight >= 170")
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await flag(chatBoxWhole, in: web), "chat box cut off by a long question")
+        #expect(try await flag("\(log) >= 60", in: web))
+        // Once nothing waits, the conversation takes the rest again.
+        _ = try await web.evaluate("document.querySelector('#input').value = ''; null;")
+        try await web.call("setAttachments", ["images": [], "quote": NSNull()])
+        #expect(try await flag("document.querySelector('#log').style.minHeight === ''", in: web))
     }
 }
 
