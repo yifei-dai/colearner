@@ -377,6 +377,12 @@ struct WalkthroughAskTests {
         _ = try await page.evaluate("window.scrollTo(0, document.getElementById('l10').getBoundingClientRect().top + pageYOffset - 41); true")
         try await page.waitFor("getComputedStyle(document.querySelector('colearner-ask')).visibility === 'hidden'")
         #expect(try await page.json(AskPage.buttonState)?["hit"] as? Bool == false)
+        // It stays hidden once the page is still and places it again: the end of the selection is out of view. (A timer
+        // set now fires after the one the page set on the scroll.)
+        _ = try await page.evaluate("window.__still = false; setTimeout(function () { window.__still = true; }, 300); true")
+        try await page.waitFor("window.__still === true")
+        #expect(try await page.evaluate("getComputedStyle(document.querySelector('colearner-ask')).visibility") as? String == "hidden")
+        #expect(try await page.json(AskPage.buttonState)?["hit"] as? Bool == false)
         let quote = try await page.json("__coLearnerAsk.collect()")
         #expect(quote?["kind"] as? String == "section")
         #expect(quote?["section"] as? String == "Topic 3 · A long section › Many paragraphs")
