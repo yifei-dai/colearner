@@ -6,35 +6,73 @@
   const log = $("#log");
   const input = $("#input");
   const sendBtn = $("#btn-send");
+  const replyBtn = $("#reply-btn");
 
-  // One click = the whole slide; with an area selected, the same buttons mean that area.
+  // One click = the whole slide. The same buttons mean what else goes with the question, in this order: a selected
+  // area, a quoted walkthrough passage, attached screenshots.
   const VIS_RULES =
     "Make ONE self-contained interactive visual as a single ```html code block (inline SVG or canvas + vanilla JS, " +
     "sliders or buttons where they help, no external files). After the block, say in 2-3 sentences what to look at and what to try.";
   function quick(action) {
-    const area = !!state.area;
-    if (action === "explain") {
-      return area
+    const explain = action === "explain";
+    if (state.area) {
+      return explain
         ? { display: "Explain this area", prompt:
             "Explain the selected area of this slide (the attached crop). Start with the one-sentence takeaway. Then go through " +
             "it piece by piece: define every symbol and say in words what each equation or figure means. Relate it to the rest " +
             "of the slide only where that helps." }
-        : { display: "Explain this slide", prompt:
-            "Explain this slide to me. Start with the one-sentence takeaway. Then go through it piece by piece: define every " +
-            "symbol, say in words what each equation or figure means, and connect it to the slides just before and after when that helps." };
+        : { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES };
     }
-    return area
-      ? { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES }
+    const q = quoted();
+    if (q && q.kind === "reply") {
+      return explain
+        ? { display: "Explain this part", prompt:
+            "Explain the part of the answer I quoted in more depth. Start with the one-sentence takeaway. Then go through it " +
+            "step by step: define every symbol and say in words what each equation means." }
+        : { display: "Visualize this part", prompt: "Visualize the idea in the part of the answer I quoted. " + VIS_RULES };
+    }
+    if (q) {
+      const from = q.kind === "notes" ? "the notes" : "the walkthrough";
+      return explain
+        ? { display: "Explain this passage", prompt:
+            "Explain the passage I quoted from " + from + ". Start with the one-sentence takeaway. Then go through it piece by " +
+            "piece: define every symbol and say in words what each equation means. Connect it to the slides where that helps, " +
+            "and say so if it disagrees with them." }
+        : { display: "Visualize this passage", prompt: "Visualize the idea in the passage I quoted from " + from + ". " + VIS_RULES };
+    }
+    const n = pics().length;
+    if (n) {
+      const shot = n > 1 ? "screenshots" : "screenshot", it = n > 1 ? "them" : "it";
+      return explain
+        ? { display: "Explain the " + shot, prompt:
+            "Explain the attached " + shot + ". Start with the one-sentence takeaway. Then go through " + it + " piece by piece: " +
+            "define every symbol and say in words what each equation or figure means. Relate " + it + " to this deck's slides " +
+            "where that helps." }
+        : { display: "Visualize the " + shot, prompt: "Visualize the key idea in the attached " + shot + ". " + VIS_RULES };
+    }
+    return explain
+      ? { display: "Explain this slide", prompt:
+          "Explain this slide to me. Start with the one-sentence takeaway. Then go through it piece by piece: define every " +
+          "symbol, say in words what each equation or figure means, and connect it to the slides just before and after when that helps." }
       : { display: "Visualize this slide", prompt: "Visualize the key idea of this slide. " + VIS_RULES };
   }
 
   const NAMES = { claude: "Claude", codex: "ChatGPT" };
 
   // messages = the whole conversation about the deck; each carries the slide it was asked on.
+  // images/quote: what waits in the chat box for the next question ([{id, label, thumb}], {id, source, section?, text, kind}).
   let state = { hasDeck: false, deckTitle: "", deckPath: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
-                conversation: null, history: [], area: null };
+                conversation: null, history: [], area: null, images: [], quote: null, processing: 0 };
   let viewAll = false;   // "This slide" (default) or "All"
   function visible(m) { return viewAll || m.page == null || m.page === state.page; }
+  // The app owns the pictures and the quote (by id); the page shows them and says which ones a question took.
+  function pics() {
+    return Array.isArray(state.images) ? state.images.filter((i) => i && typeof i.id === "string") : [];
+  }
+  function quoted() {
+    const q = state.quote;
+    return q && typeof q === "object" && typeof q.id === "string" && typeof q.text === "string" && q.text ? q : null;
+  }
   // {claude: {models:[{id,label}], model, efforts:[...], effort}, codex: {...}} — from Swift
   let config = {};
   // {claude: {windows:[{label, percent, resetsAt}], updated}, codex: {...}} — from Swift
@@ -56,12 +94,23 @@
   }
 
   // ---------- rendering ----------
+  // Whether the conversation follows its end: near the bottom when it last scrolled up, or back at it since. A taller
+  // chat box (a quote, pictures, which take their width only once loaded, the area, a longer question) or a shorter
+  // window shortens the conversation without scrolling it, so one that was following is pinned again. Only a scroll up
+  // stops it: the scroll event of the last pin can arrive after the chat box grew.
+  let following = true, lastTop = 0;
   function nearBottom() {
     return log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   }
   function toBottom() {
     log.scrollTop = log.scrollHeight;
+    following = true;
   }
+  log.addEventListener("scroll", () => {
+    following = log.scrollTop < lastTop ? nearBottom() : following || nearBottom();
+    lastTop = log.scrollTop;
+  }, { passive: true });
+  new ResizeObserver(() => { if (following) toBottom(); }).observe(log);
 
   // Busy = an assistant you are about to ask is still answering. In Both mode Claude usually finishes
   // first; a follow-up to Claude alone shouldn't have to wait for ChatGPT.
@@ -103,9 +152,7 @@
     const note = busyNote();
     const att = $("#attach");
     att.className = note ? "busynote" : "";
-    att.textContent = !state.hasDeck ? "" : note ? note
-      : state.area ? "The selected area of slide " + state.area.page + " goes with your next question"
-      : "Slide " + state.page + " goes with your question";
+    att.textContent = !state.hasDeck ? "" : note ? note : attachLine();
     for (const b of document.querySelectorAll("#providers button")) {
       const on = b.dataset.p === state.provider;
       b.classList.toggle("on", on);
@@ -116,16 +163,139 @@
     sendBtn.textContent = isBusy ? "Stop" : "Send";
     sendBtn.classList.toggle("stop", isBusy);
     sendBtn.disabled = !state.hasDeck;
-    for (const c of document.querySelectorAll(".chip")) c.disabled = !state.hasDeck || (isBusy && c.id !== "btn-area");
+    // Picking an area or a picture for the next question is fine while an answer streams.
+    for (const c of document.querySelectorAll("#quick .chip"))
+      c.disabled = !state.hasDeck || (isBusy && c.id !== "btn-area" && c.id !== "btn-attach");
     const ex = document.querySelector('.chip[data-action="explain"]'), vi = document.querySelector('.chip[data-action="visualize"]');
     ex.textContent = quick("explain").display;
     vi.textContent = quick("visualize").display;
+    const ph = placeholder();
+    if (input.placeholder !== ph) input.placeholder = ph;
     const ab = $("#areabox");
     if (state.area) {
       $("#area-img").src = state.area.thumb;
       $("#area-label").textContent = "Area of slide " + state.area.page;
       ab.hidden = false;
     } else ab.hidden = true;
+    renderAttachments();
+  }
+
+  /// "Slide 4 goes with your question", "Slide 4, 1 screenshot and the walkthrough passage go with your question".
+  function attachLine() {
+    const parts = [state.area ? "The selected area of slide " + state.area.page : "Slide " + state.page];
+    const n = pics().length, q = quoted();
+    if (n) parts.push(n + (n === 1 ? " screenshot" : " screenshots"));
+    if (q) parts.push(q.kind === "notes" ? "the notes passage" : q.kind === "reply" ? "the quoted part of the answer" : "the walkthrough passage");
+    const last = parts.pop();
+    return (parts.length ? parts.join(", ") + " and " + last + " go" : last + " goes")
+      + (state.area ? " with your next question" : " with your question");
+  }
+  function placeholder() {
+    const n = pics().length;
+    const q = quoted();
+    const what = state.area ? "the selected area" : q ? (q.kind === "reply" ? "the quoted part" : "the passage")
+      : n > 1 ? "the screenshots" : n ? "the screenshot" : "this slide";
+    return "Ask about " + what + "…  (Enter to send, Shift+Enter for a new line)";
+  }
+
+  // ---------- pictures and a quoted passage waiting in the chat box ----------
+  /// "From Lecture 3 Walkthrough › Topic 2 › Rotation matrices" (a notes quote names the notes).
+  function quoteFrom(q) {
+    const source = String(q.source || "").trim() || (q.kind === "notes" ? "the notes" : "the walkthrough");
+    const section = String(q.section || "").trim();
+    return "From " + source + (section ? " › " + section : "");
+  }
+  // Previews come from the app as data URLs; anything else (a web address in an edited chat file) is not loaded.
+  function safeThumb(t) { return typeof t === "string" && /^data:image\//i.test(t); }
+
+  let attachSig = null;
+  function renderAttachments() {
+    const box = $("#attachbox");
+    const list = pics(), q = quoted(), waiting = preparing();
+    // Rebuilt only when they change: renderHeader runs with every streamed update.
+    const sig = JSON.stringify([list.map((i) => [i.id, i.label, String(i.thumb).length]), q, waiting]);
+    if (sig === attachSig) return;
+    attachSig = sig;
+    // Removing pictures one after another from the keyboard keeps the focus on the x buttons.
+    const xs0 = Array.from(box.querySelectorAll(".att-x")), at = xs0.indexOf(document.activeElement);
+    const focusKey = at >= 0 ? xs0[at].dataset.key : null;
+    box.textContent = "";
+    if (list.length) {
+      const row = el("div", "att-pics");
+      for (const i of list) {
+        const label = String(i.label || "Picture");
+        const chip = el("span", "att-pic");
+        chip.title = label;
+        if (safeThumb(i.thumb)) {
+          const img = el("img");
+          img.src = i.thumb;
+          img.alt = "";
+          img.draggable = false;   // dragging it would bring up the drop layer and attach it again
+          chip.appendChild(img);
+        }
+        chip.appendChild(el("span", "att-label", label));
+        chip.appendChild(removeButton("Remove", "Remove " + label, () => post({ type: "removeImage", id: i.id }), "img:" + i.id));
+        row.appendChild(chip);
+      }
+      box.appendChild(row);
+    }
+    if (waiting) {
+      const chip = el("span", "att-pic att-wait", waiting === 1 ? "Preparing a picture…" : "Preparing " + waiting + " pictures…");
+      (box.querySelector(".att-pics") || box.appendChild(el("div", "att-pics"))).appendChild(chip);
+    }
+    if (q) {
+      const card = el("div", "att-quote");
+      const main = el("div", "att-q-main");
+      const from = el("div", "att-q-from", quoteFrom(q));
+      from.title = quoteFrom(q);
+      main.append(from, el("div", "att-q-text", q.text));
+      card.append(main, removeButton("Remove the quoted passage", "Remove the quoted passage", () => post({ type: "clearQuote" }), "quote:" + q.id));
+      box.appendChild(card);
+    }
+    box.hidden = !list.length && !q && !waiting;
+    if (at >= 0) {
+      const xs = Array.from(box.querySelectorAll(".att-x"));
+      (xs.find((x) => x.dataset.key === focusKey) || xs[Math.min(at, xs.length - 1)] || input).focus();
+    }
+    fitLog();
+  }
+  /// While something waits it gives way first and scrolls (chat.css): the conversation keeps a quarter of the window, but
+  /// not at the cost of the chat box's own rows (chips, area, question box, buttons, status line); where both don't fit,
+  /// it gets what the rows leave. A window under 520 px has no room for a quarter and what waits: there the conversation
+  /// gets what the whole chat box leaves, as before.
+  function fitLog() {
+    const box = $("#attachbox"), composer = $("#composer");
+    let min = 0;
+    if (!box.hidden && innerHeight >= 520) {
+      const c = getComputedStyle(composer);
+      const rows = $("#status").getBoundingClientRect().bottom - $("#quick").getBoundingClientRect().top - box.getBoundingClientRect().height
+        + parseFloat(c.paddingTop) + parseFloat(c.paddingBottom) + parseFloat(c.borderTopWidth);
+      const room = composer.getBoundingClientRect().bottom - log.getBoundingClientRect().top;
+      min = Math.max(0, Math.min(innerHeight / 4, Math.floor(room - rows)));
+    }
+    const px = min ? min + "px" : "";
+    if (log.style.minHeight !== px) log.style.minHeight = px;
+  }
+  // Measured again when the window or a row changes size (a longer question, the area, a note, the other-slides row);
+  // a row's change on the next frame, since resizing the conversation inside the observer would be a resize loop.
+  let fitQueued = false;
+  const rowsObserver = new ResizeObserver(() => {
+    if (fitQueued) return;
+    fitQueued = true;
+    requestAnimationFrame(() => { fitQueued = false; fitLog(); });
+  });
+  for (const s of ["#head", "#others", "#quick", "#areabox", "#inputwrap", "#bar", "#note", "#status"]) rowsObserver.observe($(s));
+  window.addEventListener("resize", fitLog);
+  /// Pictures the app is still decoding (dropped, pasted or chosen a moment ago).
+  function preparing() { return Number.isInteger(state.processing) && state.processing > 0 ? state.processing : 0; }
+  function removeButton(title, label, onclick, key) {
+    const x = el("button", "att-x", "✕");
+    x.type = "button";
+    x.dataset.key = key;
+    x.title = title;
+    x.setAttribute("aria-label", label);
+    x.onclick = onclick;
+    return x;
   }
 
   // ---------- model menu and usage card (popovers) ----------
@@ -186,6 +356,7 @@
     clearTimeout(searchState.timer);
     searchLayer.hidden = true;
     setSearchBackground(false);
+    post({ type: "searchState", open: false });
     if (restoreFocus) {
       const target = searchState.returnFocus;
       (target && target.isConnected ? target : $("#btn-search")).focus();
@@ -214,6 +385,7 @@
     }
     searchState.open = true;
     searchLayer.hidden = false;
+    post({ type: "searchState", open: true });
     setSearchBackground(true);
     queueSearch();
     searchInput.focus();
@@ -282,6 +454,7 @@
       target.tabIndex = -1;
       target.focus({ preventScroll: true });
       target.scrollIntoView({ block: "center", behavior: "auto" });
+      following = nearBottom();   // stays on the found message when the chat box changes too
     });
     highlightTimer = setTimeout(() => {
       if (highlightedMessageID !== id) return;
@@ -577,7 +750,8 @@
     } else if (!state.messages.length) {
       d.innerHTML = "Ask anything about <b>slide " + state.page + "</b>.<br>" +
         "This chat covers the whole deck: move between slides and keep asking; the assistants remember the conversation " +
-        "and see each slide you ask on. Use ✂︎ Select area to ask about part of a slide.";
+        "and see each slide you ask on. Use ✂︎ Select area to ask about part of a slide; paste, drop or 📎 attach a " +
+        "screenshot to ask about that.";
     } else {
       d.innerHTML = "Nothing asked on <b>slide " + state.page + "</b> yet in this chat.<br>Ask away: the assistants remember what you asked on the other slides.";
     }
@@ -673,7 +847,53 @@
         post({ type: "openLink", url: a.getAttribute("href") });
       });
     }
+    // Dragging a picture in an answer would bring up the drop layer and attach it.
+    for (const img of bodyEl.querySelectorAll("img")) img.draggable = false;
   }
+
+  // A passage quoted in a question: about six lines, and the rest on click when there is more (selecting text to copy
+  // doesn't toggle it). Stays open across redraws.
+  const openQuotes = new Set();
+  function quoteBlock(m) {
+    const box = document.createElement("div");
+    box.className = "q-block" + (openQuotes.has(m.id) ? " open" : "");
+    const from = document.createElement("div");
+    from.className = "q-from";
+    from.textContent = from.title = quoteFrom(m.quote);
+    const text = document.createElement("div");
+    text.className = "q-text";
+    text.textContent = m.quote.text;
+    box.append(from, text);
+    const toggle = () => {
+      if (!box.classList.contains("more")) return;
+      const open = !box.classList.contains("open");
+      box.classList.toggle("open", open);
+      if (open) openQuotes.add(m.id); else openQuotes.delete(m.id);
+      fitQuote(box);
+    };
+    box.addEventListener("click", () => { if (!String(window.getSelection() || "")) toggle(); });
+    box.addEventListener("keydown", (e) => {
+      if (e.target === box && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); }
+    });
+    requestAnimationFrame(() => fitQuote(box));   // measured once it is on the page
+    return box;
+  }
+  function fitQuote(box) {
+    if (!box.isConnected) return;
+    const open = box.classList.contains("open"), text = box.querySelector(".q-text");
+    const more = open || text.scrollHeight > text.clientHeight + 1;
+    box.classList.toggle("more", more);
+    if (more) {
+      box.tabIndex = 0;
+      box.setAttribute("role", "button");
+      box.setAttribute("aria-expanded", open ? "true" : "false");
+      box.title = open ? "Show less of the passage" : "Show the whole passage";
+    } else {
+      for (const a of ["tabindex", "role", "aria-expanded", "title"]) box.removeAttribute(a);
+    }
+  }
+  // A narrower panel can clamp a passage that fitted before.
+  window.addEventListener("resize", () => log.querySelectorAll(".q-block").forEach(fitQuote));
 
   function fillMessage(el, m) {
     el.className = "msg " + m.role + (m.provider ? " " + m.provider : "") + (m.status === "streaming" ? " streaming" : "")
@@ -694,10 +914,27 @@
       if (m.areaThumb) {
         const img = document.createElement("img");
         img.className = "area";
+        img.draggable = false;
         img.src = m.areaThumb;
         img.alt = "selected area";
         b.appendChild(img);
       }
+      if (Array.isArray(m.images)) {
+        const row = document.createElement("div");
+        row.className = "shots";
+        for (const p of m.images) {
+          if (!p || !safeThumb(p.thumb)) continue;
+          const img = document.createElement("img");
+          img.className = "shot";
+          img.draggable = false;
+          img.src = p.thumb;
+          img.alt = String(p.label || "attached picture");
+          img.title = String(p.label || "");
+          row.appendChild(img);
+        }
+        if (row.firstChild) b.appendChild(row);
+      }
+      if (m.quote && typeof m.quote === "object" && typeof m.quote.text === "string" && m.quote.text) b.appendChild(quoteBlock(m));
       b.appendChild(document.createTextNode(m.display || m.text));
       el.appendChild(b);
       return;
@@ -755,6 +992,7 @@
   }
 
   function renderAll() {
+    hideReply();   // the selection it stood by is gone
     elById.clear();
     log.textContent = "";
     if (state.conversation && state.conversation.legacy && state.messages.length) log.appendChild(legacyBanner());
@@ -788,6 +1026,8 @@
   // ---------- API for Swift ----------
   window.CL = {
     setThread(s) {
+      // A question's pictures and quote are fixed once it is sent, so the messages' ids, status and text say whether
+      // anything needs redrawing. The pictures and quote waiting in the chat box are redrawn by renderHeader.
       const sig = (x) => (x.conversation ? x.conversation.id : "") + "|" + (x.hasDeck ? x.deckPath : "") + "|" + x.pageCount + "|"
         + (x.hasDeck ? x.deckTitle : "") + "|"
         + (x.messages || []).map((m) => m.id + ":" + m.status + ":" + (m.text || "").length).join(",");
@@ -833,6 +1073,14 @@
       state.area = a || null;
       renderHeader();
     },
+    /// {images: [{id, label, thumb}], quote: {id, source, section?, text, kind} | null}: what waits in the chat box.
+    setAttachments(a) {
+      state.images = a && Array.isArray(a.images) ? a.images : [];
+      state.quote = a && a.quote && typeof a.quote === "object" ? a.quote : null;
+      state.processing = a && Number.isInteger(a.processing) && a.processing > 0 ? a.processing : 0;
+      renderHeader();
+    },
+    showNote,
     setProvider(p) {
       state.provider = p;
       renderHeader();
@@ -866,10 +1114,21 @@
   function send(text, action) {
     if (!state.hasDeck) return;
     if (busy()) return;
+    // An empty box with an area, a quote or pictures waiting (or one still being prepared): Enter or Send asks to
+    // explain them.
+    if (!action && !text.trim() && (state.area || quoted() || pics().length || preparing())) action = "explain";
     const q = action ? quick(action) : null;
     const prompt = q ? q.prompt : text.trim();
     if (!prompt) return;
-    post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider, useArea: !!state.area });
+    // A picture still being prepared would miss this question: wait for it.
+    if (preparing()) {
+      showNote({ text: "A picture is still being prepared. Send again in a moment.", error: false });
+      return;
+    }
+    // The pictures and quote on screen now go with it.
+    const quote = quoted();
+    post({ type: "send", text: prompt, display: q ? q.display : null, provider: state.provider, useArea: !!state.area,
+           imageIDs: pics().map((i) => i.id), quoteID: quote ? quote.id : null });
     if (!q) {
       input.value = "";
       autoGrow();
@@ -905,6 +1164,7 @@
       const replacement = id && elById.get(id);
       if (replacement && top != null) {
         log.scrollTop += replacement.getBoundingClientRect().top - top;
+        following = nearBottom();   // "All" hides the other-slides row and the conversation grows: the answer stays put
         const link = Array.from(replacement.querySelectorAll("button.slide-ref")).find((node) => Number(node.dataset.slide) === request.page);
         link?.focus({ preventScroll: true });
       }
@@ -930,6 +1190,299 @@
   for (const c of document.querySelectorAll(".chip[data-action]")) c.onclick = () => send("", c.dataset.action);
   $("#btn-area").onclick = () => post({ type: "selectArea" });
   $("#area-clear").onclick = () => post({ type: "clearArea" });
+  $("#btn-attach").onclick = () => post({ type: "chooseImages" });
+
+  // A short line by the status line for a few seconds ("Only pictures can be attached"); warn color for problems.
+  let noteTimer = null;
+  function showNote(n) {
+    const box = $("#note");
+    clearTimeout(noteTimer);
+    box.textContent = n && n.text ? String(n.text) : "";
+    box.classList.toggle("error", !!(n && n.error));
+    noteTimer = setTimeout(() => { box.textContent = ""; box.classList.remove("error"); }, 5000);
+  }
+
+  // A paste that reaches the page with pictures on it (the context menu's Paste; ⌘V and Edit › Paste with a picture
+  // are taken by the app first): the pictures are read here, like dropped ones. Text pastes as usual.
+  document.addEventListener("paste", (e) => {
+    const cd = e.clipboardData;
+    if (!cd || !state.hasDeck || searchState.open) return;
+    if (!Array.from(cd.types || []).includes("Files") || (cd.getData("text/plain") || "").trim()) return;
+    const files = Array.from(cd.files || []);
+    if (!files.length) return;
+    e.preventDefault();
+    addPictures(files, "pasted");
+  }, true);
+
+  // ---------- dropping pictures on the chat ----------
+  const dropLayer = $("#drop-layer");
+  const PICTURE_NAME = /\.(png|jpe?g|gif|heic|heif|tiff?|webp|bmp)$/i;
+  const MAX_PICTURES = 8;                     // per question, as in the app (ImageAttachments.maxPending)
+  const MAX_DROP_BYTES = 40 * 1024 * 1024;
+  let dragDepth = 0;   // dragenter/dragleave pairs of nested elements: the overlay stays up until the drag leaves the page
+  function carriesFiles(e) { return !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files"); }
+  function showDrop() {
+    $("#drop-text").textContent = state.hasDeck ? "Drop screenshots or pictures to attach" : "Open a lecture first";
+    dropLayer.classList.toggle("off", !state.hasDeck);
+    dropLayer.hidden = false;
+  }
+  function hideDrop() {
+    dragDepth = 0;
+    dropLayer.hidden = true;
+  }
+  // Text dragged into the chat box keeps the browser's own handling; only files are taken here.
+  document.addEventListener("dragenter", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    showDrop();
+  });
+  document.addEventListener("dragover", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();   // otherwise WebKit takes the drop and tries to open the file
+    e.dataTransfer.dropEffect = "copy";
+    if (dropLayer.hidden) showDrop();
+  });
+  document.addEventListener("dragleave", (e) => {
+    if (!carriesFiles(e)) return;
+    if (--dragDepth <= 0) hideDrop();
+  });
+  document.addEventListener("drop", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    hideDrop();
+    if (state.hasDeck) dropPictures(e.dataTransfer);
+  });
+  document.addEventListener("dragend", hideDrop);
+  // No mouse moves reach the page during a drag: one means a drag that ended without telling the page is over.
+  document.addEventListener("mousemove", () => { if (!dropLayer.hidden) hideDrop(); });
+
+  function fileNames(names) {
+    const q = names.slice(0, 2).map((n) => "“" + n + "”");
+    return names.length <= 2 ? q.join(" and ") : q.join(", ") + " and " + (names.length - 2) + " more";
+  }
+  function dropPictures(dt) {
+    const files = Array.from(dt.files || []);
+    // Files promised by the app they come from (a browser, Photos) can't be read here: the app reads the drag.
+    if (!files.length) { post({ type: "dropImages" }); return; }
+    addPictures(files, false);
+  }
+  /// Dropped or pasted files: the pictures are read (as many as one question still takes), the rest skipped with a note.
+  function addPictures(files, pasted) {
+    const pictures = [], skipped = [], large = [];
+    for (const f of files) {
+      const name = String(f.name || "");
+      if (!/^image\//i.test(f.type || "") && !PICTURE_NAME.test(name)) skipped.push(name);
+      else if (f.size > MAX_DROP_BYTES) large.push(name);
+      else pictures.push(f);
+    }
+    const room = Math.max(0, MAX_PICTURES - pics().length);
+    const notes = [];
+    if (skipped.length) notes.push("Only pictures can be attached (skipped " + fileNames(skipped) + ").");
+    if (large.length) notes.push(fileNames(large) + (large.length === 1 ? " is" : " are") + " too large to attach.");
+    if (pictures.length > room) notes.push("At most " + MAX_PICTURES + " pictures go with one question.");
+    if (notes.length) showNote({ text: notes.join(" "), error: true });
+    readPictures(pictures.slice(0, room), pasted);
+  }
+  // One file at a time, in order; the app decodes and scales each. A copied picture has no name of its own
+  // (WebKit calls it image.png), so it is a "Pasted image".
+  function readPictures(files, pasted) {
+    const f = files.shift();
+    if (!f) return;
+    const name = pasted && /^image\.\w+$/i.test(f.name || "image.png") ? "Pasted image" : f.name;
+    const r = new FileReader();
+    r.onload = () => {
+      if (typeof r.result === "string" && r.result.startsWith("data:")) post({ type: "attachImageData", name, data: r.result });
+      readPictures(files, pasted);
+    };
+    r.onerror = () => {
+      showNote({ text: "Couldn’t read “" + name + "”.", error: true });
+      readPictures(files, pasted);
+    };
+    r.readAsDataURL(f);
+  }
+
+  // ---------- Reply: ask about part of an answer ----------
+  // Select part of a finished answer and a Reply button appears by it; the part goes into the chat box as a quote
+  // (formulas as their TeX) for the next question.
+  /// The selection, when it starts in a finished answer and ends in the same answer, as the part of the answer it
+  /// highlights (see trimmed). A triple-click on the answer's last paragraph, or a drag that overshoots it, ends on the
+  /// answer's own Copy row: that counts as the end of the answer.
+  function replySelection() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed || !String(sel).trim()) return null;
+    let range = sel.getRangeAt(0);
+    const up = (n) => n && (n.nodeType === 1 ? n : n.parentElement);
+    const body = (n) => { const e = up(n); return e ? e.closest(".msg.assistant > .body") : null; };
+    const b = body(range.startContainer);
+    if (!b) return null;
+    const msg = b.closest(".msg");
+    if (!msg || msg.classList.contains("streaming") || !msg.dataset.messageId) return null;
+    if (body(range.endContainer) !== b) {
+      const e = up(range.endContainer);
+      if (!e || e.closest(".msg") !== msg) return null;
+      range = range.cloneRange();
+      range.setEnd(b, b.childNodes.length);
+    }
+    range = trimmed(range, b);
+    if (!range.toString().trim()) return null;   // it only touches a block or formula: nothing of the answer is highlighted
+    return { sel, range, body: b, id: msg.dataset.messageId };
+  }
+  /// The range without what it only touches: an end at the very start of a node moves out of it, and so does a start at
+  /// the very end of one, so a block or formula it touches adds nothing (no stray list marker, no formula that was never
+  /// highlighted). A triple-click ends at the first position of the next block or of a formula's hidden MathML; a drag
+  /// that stops by a formula ends at the first position of the formula as shown, after the MathML and an empty strut.
+  function trimmed(range, body) {
+    const r = range.cloneRange();
+    // what the reader does not see: the line breaks between blocks, a formula's hidden MathML and its empty struts
+    const blank = (n) => n.nodeType === 3 ? !/\S/.test(n.nodeValue)
+      : n.nodeType === 1 && (n.classList.contains("katex-mathml") || (n.tagName === "SPAN" && !n.firstChild));
+    const atStart = (n, o) => n.nodeType === 3 ? o === 0 : Array.prototype.slice.call(n.childNodes, 0, o).every(blank);
+    const atEnd = (n, o) => n.nodeType === 3 ? o === n.length : Array.prototype.slice.call(n.childNodes, o).every(blank);
+    while (r.endContainer !== body && body.contains(r.endContainer) && atStart(r.endContainer, r.endOffset)) r.setEndBefore(r.endContainer);
+    while (r.startContainer !== body && body.contains(r.startContainer) && atEnd(r.startContainer, r.startOffset)) r.setStartAfter(r.startContainer);
+    return r;
+  }
+  /// The selected part as the reader sees it: one line per block, formulas as $…$ / $$…$$ from KaTeX's TeX annotation,
+  /// code as written; visuals and buttons left out.
+  function answerText(range) {
+    const formula = (k) => {
+      const a = k.querySelector('annotation[encoding="application/x-tex"]');
+      const t = (a ? a.textContent : k.textContent).trim();
+      return k.closest(".katex-display") ? "$$" + t + "$$" : "$" + t + "$";
+    };
+    let root = range.commonAncestorContainer;
+    if (root.nodeType !== 1) root = root.parentElement;
+    const inFormula = root && root.closest(".katex");
+    if (inFormula) return formula(inFormula);   // a selection inside one formula takes all of it
+    let out = "";
+    const br = () => {
+      if (/(^|\n)(-|\d+\.) $/.test(out)) return;   // a list marker just written: the item's paragraph goes on its line
+      out = out.replace(/[ \t]+$/, "");
+      if (out && !out.endsWith("\n")) out += "\n";
+    };
+    const walk = (node) => {
+      for (let ch = node.firstChild; ch; ch = ch.nextSibling) {
+        if (!range.intersectsNode(ch)) continue;
+        if (ch.nodeType === 3) {
+          let t = ch.nodeValue;
+          if (ch === range.endContainer) t = t.slice(0, range.endOffset);
+          if (ch === range.startContainer) t = t.slice(range.startOffset);
+          out += ch.parentElement.closest("pre") ? t : t.replace(/\s+/g, " ");
+          continue;
+        }
+        if (ch.nodeType !== 1) continue;
+        const tag = ch.tagName.toUpperCase();
+        if (tag === "BR") { out += "\n"; continue; }
+        if (ch.classList.contains("katex")) {
+          const display = !!ch.closest(".katex-display");
+          if (display) br();
+          out += formula(ch);
+          if (display) br();
+          continue;
+        }
+        if (ch.classList.contains("slide-ref")) { out += ch.textContent; continue; }
+        if (/^(SCRIPT|STYLE|IFRAME|SVG|CANVAS|IMG|BUTTON)$/.test(tag) || ch.classList.contains("visual")) continue;
+        const block = /^(P|DIV|LI|UL|OL|PRE|H[1-6]|TABLE|TR|BLOCKQUOTE)$/.test(tag);
+        if (block) br();
+        if (tag === "LI") out += ch.parentElement && ch.parentElement.tagName === "OL"
+          ? (Array.prototype.indexOf.call(ch.parentElement.children, ch) + (Number(ch.parentElement.getAttribute("start")) || 1)) + ". " : "- ";
+        if ((tag === "TD" || tag === "TH") && ch.previousElementSibling) out += " | ";
+        walk(ch);
+        if (block) br();
+      }
+    };
+    walk(root);
+    return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 8000);
+  }
+  function hideReply() { replyBtn.hidden = true; }
+  /// Below the end of the selection (the right end of its lowest line), inside the conversation; hidden while that
+  /// line is scrolled out of view.
+  function placeReply() {
+    const s = replySelection();
+    if (!s) { hideReply(); return; }
+    const rects = Array.from(s.range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
+    if (!rects.length) { hideReply(); return; }
+    let last = rects[0];
+    for (const r of rects) if (r.bottom > last.bottom + 1 || (Math.abs(r.bottom - last.bottom) <= 1 && r.right > last.right)) last = r;
+    const lr = log.getBoundingClientRect();
+    replyBtn.hidden = false;
+    replyBtn.style.visibility = last.bottom < lr.top || last.top > lr.bottom ? "hidden" : "";
+    const w = replyBtn.offsetWidth, h = replyBtn.offsetHeight;
+    let y = last.bottom + 6;
+    if (y + h > lr.bottom - 4) y = last.top - h - 6;
+    replyBtn.style.left = Math.round(Math.max(lr.left + 6, Math.min(last.right - w + 10, lr.right - w - 6))) + "px";
+    replyBtn.style.top = Math.round(Math.max(lr.top + 4, y)) + "px";
+  }
+  // A triple-click selects a paragraph as WebKit sees it, which a line break, a nested list or a display formula also
+  // ends, but WebKit stops it at a formula's hidden MathML. An end it left at a formula moves on to the end of that
+  // paragraph, within its P (or list item, heading, cell), and the highlight follows, so it shows what Reply quotes.
+  const BLOCK = /^(P|DIV|LI|UL|OL|PRE|H[1-6]|TABLE|THEAD|TBODY|TR|TD|TH|BLOCKQUOTE|DL|DT|DD)$/;
+  function paragraphOf(node, body) {
+    for (let e = node.parentElement; e && e !== body; e = e.parentElement)
+      if (BLOCK.test(e.tagName)) return /^(P|LI|H[1-6]|TD|TH|DT|DD)$/.test(e.tagName) ? e : null;
+    return null;
+  }
+  function wholeParagraphs() {
+    const s = replySelection();
+    if (!s) return;
+    const raw = s.sel.getRangeAt(0), r = s.range, texts = [];
+    const walker = document.createTreeWalker(s.body, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) if (/\S/.test(t.nodeValue) && r.intersectsNode(t)) texts.push(t);
+    if (!texts.length) return;
+    const first = paragraphOf(texts[0], s.body), last = paragraphOf(texts[texts.length - 1], s.body);
+    const atFormula = (n) => { const e = n.nodeType === 1 ? n : n.parentElement; return !!(e && e.closest(".katex")); };
+    // what ends WebKit's paragraph inside a P or list item: a line break, a nested block, a display formula
+    const ends = (n) => n.nodeType === 1 && (BLOCK.test(n.tagName) || n.tagName === "BR" || n.classList.contains("katex-display"));
+    // The nearest of those before (back) or after text t in p, also a line break inside bold or a link; or the display
+    // formula t is in (inside: its line is the formula itself).
+    const lineEnd = (t, p, back) => {
+      const step = (n) => back ? n.previousSibling : n.nextSibling;
+      for (let n = t; n !== p; n = n.parentNode) {
+        if (n !== t && ends(n)) return { node: n, inside: true };
+        for (let sib = step(n); sib; sib = step(sib)) {
+          if (ends(sib)) return { node: sib };
+          const brs = sib.nodeType === 1 ? sib.querySelectorAll("br") : [];
+          if (brs.length) return { node: brs[back ? brs.length - 1 : 0] };
+        }
+      }
+      return null;
+    };
+    if (first && atFormula(raw.startContainer) && r.comparePoint(first, 0) < 0) {
+      const e = lineEnd(texts[0], first, true);   // back to the start of the first text's line
+      if (!e) r.setStart(first, 0); else if (e.inside) r.setStartBefore(e.node); else r.setStartAfter(e.node);
+    }
+    if (last && atFormula(raw.endContainer) && r.comparePoint(last, last.childNodes.length) > 0) {
+      const e = lineEnd(texts[texts.length - 1], last, false);   // on to the end of the last text's line
+      if (!e) r.setEnd(last, last.childNodes.length); else if (e.inside) r.setEndAfter(e.node); else r.setEndBefore(e.node);
+    }
+    s.sel.removeAllRanges();
+    s.sel.addRange(r);
+  }
+  // After the selection settles (double and triple clicks too).
+  document.addEventListener("mouseup", (e) => {
+    if (e.target === replyBtn) return;
+    const paragraphs = e.detail >= 3;
+    setTimeout(() => { if (paragraphs) wholeParagraphs(); placeReply(); }, 0);
+  });
+  document.addEventListener("keyup", (e) => { if (e.shiftKey) setTimeout(placeReply, 0); });
+  document.addEventListener("selectionchange", () => { if (!replyBtn.hidden) placeReply(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideReply(); }, true);
+  document.addEventListener("mousedown", (e) => { if (e.target !== replyBtn) hideReply(); }, true);
+  log.addEventListener("scroll", () => { if (!replyBtn.hidden) placeReply(); }, { passive: true });
+  window.addEventListener("resize", () => { if (!replyBtn.hidden) placeReply(); });
+  replyBtn.addEventListener("mousedown", (e) => e.preventDefault());   // keeps the selection until the click
+  replyBtn.onclick = () => {
+    const s = replySelection();
+    hideReply();
+    if (!s || !state.hasDeck) return;
+    const text = answerText(s.range);
+    if (!text) return;
+    post({ type: "quoteReply", messageID: s.id, text });
+    s.sel.removeAllRanges();
+    input.focus();
+  };
+
   for (const b of document.querySelectorAll("#viewseg button"))
     b.onclick = () => { viewAll = b.dataset.v === "all"; renderAll(); };
   $("#btn-new").onclick = () => post({ type: "newChat" });

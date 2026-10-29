@@ -52,7 +52,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #others .pg { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 0 7px; margin: 0 2px; font-size: 12px; }
 #others .pg:hover { border-color: var(--accent); color: var(--accent); }
 
-#head, #others, #composer { flex: 0 0 auto; }
+#head, #others { flex: 0 0 auto; }
 #log { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; position: relative; padding: 12px 12px 4px; }
 .empty { color: var(--muted); text-align: center; margin-top: 30%; padding: 0 20px; }
 .empty b { color: var(--ink); }
@@ -100,7 +100,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .visual iframe { width: 100%; border: 0; display: block; background: #fff; min-height: 120px; }
 .visual pre { margin: 0; border-radius: 0; max-height: 360px; }
 
-#composer { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 10px 10px; }
+/* Only the pictures and quote waiting in it can shrink (#attachbox below); the rest keeps its size. */
+#composer { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0;
+  border-top: 1px solid var(--line); background: var(--panel); padding: 8px 10px 10px; }
+#composer > * { flex-shrink: 0; }
 #quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .chip { border: 1px solid var(--line); background: var(--bg); border-radius: 14px; padding: 2px 10px; font-size: 12px; }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
@@ -211,6 +214,54 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #areabox img { max-height: 46px; max-width: 120px; border-radius: 4px; border: 1px solid var(--line); }
 #areabox #area-label { flex: 1; color: var(--ink); }
 .busynote { color: var(--muted); font-size: 12px; font-style: italic; }
+/* pictures and a quoted passage waiting for the next question; chips wrap in a narrow panel. In a short window they
+   give way first and scroll, so the conversation keeps a quarter of the window (fitLog in chat.js, as far as the chat
+   box's own rows leave room, and only in a window of 520 px or more); if even the rows don't fit, the top of the chat
+   box is cut rather than Send and the status line. */
+#attachbox { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; min-width: 0; min-height: 0; overflow-y: auto; }
+#composer > #attachbox { flex-shrink: 1; }
+#attachbox > * { flex-shrink: 0; }
+body:has(#attachbox:not([hidden])) #composer { justify-content: flex-end; overflow: clip; }
+/* eight pictures one per row would take most of a tall window: the row scrolls instead */
+.att-pics { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-height: 30vh; overflow-y: auto; }
+.att-pic { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 3px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); font-size: 12px; }
+.att-pic img { flex: 0 0 auto; height: 46px; width: auto; max-width: 120px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.att-label { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-x { flex: 0 0 auto; align-self: center; background: none; border: 0; border-radius: 6px; padding: 0 5px; color: var(--muted);
+  font-size: 12px; line-height: 20px; }
+.att-x:hover { color: var(--ink); background: var(--code-bg); }
+.att-quote { display: flex; align-items: flex-start; gap: 6px; min-width: 0; padding: 4px 3px 5px 9px; font-size: 12px;
+  border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 9px; background: var(--bg); }
+.att-q-main { flex: 1; min-width: 0; }
+.att-q-from { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.att-q-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+/* in a question: its pictures, then the quoted passage (about six lines until clicked) */
+.bubble .shots { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+.bubble img.shot { display: block; max-width: min(220px, 100%); max-height: 140px; border-radius: 6px; border: 1px solid var(--line); }
+.bubble .q-block { margin: 0 0 6px; padding: 1px 0 1px 9px; border-left: 3px solid var(--accent); font-size: 13px; border-radius: 2px; }
+.bubble .q-block.more { cursor: pointer; }
+.bubble .q-block:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bubble .q-from { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bubble .q-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; overflow-wrap: anywhere; }
+.bubble .q-block.open .q-text { display: block; -webkit-line-clamp: none; }
+#note { margin-top: 6px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#note:empty { margin: 0; }
+#note.error { color: var(--warn); }
+/* while files are dragged over the chat. The layer itself takes the drag (so a visual's frame underneath can't swallow
+   the drop); its text doesn't, so moving over it doesn't count as leaving the layer. */
+#drop-layer { position: fixed; inset: 6px; z-index: 150; display: flex; align-items: center; justify-content: center; padding: 16px;
+  border: 2px dashed var(--accent); border-radius: 12px; background: color-mix(in srgb, var(--bg) 90%, transparent);
+  color: var(--accent); font-size: 14px; font-weight: 600; text-align: center; }
+#drop-layer.off { border-color: var(--muted); color: var(--muted); }
+#drop-layer * { pointer-events: none; }
+.att-wait { color: var(--muted); font-style: italic; padding: 3px 8px; }
+/* "Reply" by a selection in an answer: asks about just that part */
+#reply-btn { position: fixed; z-index: 40; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; padding: 3px 11px;
+  background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25); -webkit-user-select: none; user-select: none; }
+#reply-btn:hover { filter: brightness(1.08); }
 /* history popover rows */
 .hist { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .hist:hover { background: var(--user); }

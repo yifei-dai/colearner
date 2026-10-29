@@ -134,11 +134,59 @@ enum DeckContext {
         return s + "</lecture_deck>\n\n"
     }
 
+    /// The line before the question: the slide the student is on, the images attached (in order), and what "this" is.
+    /// `images` are the prompt names of attached pictures ("an image the student pasted").
+    static func questionNote(page: Int, count: Int, slides: [Int], area: Bool, images: [String], quote: Bool) -> String {
+        var note = "[The student is on slide \(page) of \(count).]"
+        var parts = slides.map { "slide \($0)" }
+        if area { parts.append("the area of slide \(page) the student selected") }
+        parts += images
+        if !parts.isEmpty { note += " Attached images, in order: " + parts.joined(separator: ", ") + "." }
+        // Everything the student attached, as the chat box shows it (none of them outranks the others).
+        var about: [String] = []
+        if area { about.append("the selected area") }
+        if quote { about.append("the quoted passage") }
+        if !images.isEmpty { about.append(images.count == 1 ? "the attached image" : "the attached images") }
+        if let last = about.popLast() {
+            note += " The question is about " + (about.isEmpty ? last : about.joined(separator: ", ") + " and " + last) + "."
+        }
+        return note
+    }
+
+    /// A passage the student quoted from the deck's walkthrough page or notes, or from an earlier answer, put before the
+    /// question. `p` is the assistant being asked (an answer of its own is "your earlier answer"); `otherChat`: the
+    /// answer is from another chat about the deck (New chat or History since), so this conversation doesn't hold it.
+    static func excerpt(_ q: ChatQuote, for p: Provider? = nil, otherChat: Bool = false) -> String {
+        let page = "the walkthrough page for this deck (a study page written from these slides)"
+        let tag: String, intro: String
+        switch q.kind {
+        case "notes":
+            (tag, intro) = ("notes_excerpt", "The student selected this passage in the typed notes for this deck "
+                + "(text taken from the PDF, so formulas may be garbled):")
+        case "section": (tag, intro) = ("walkthrough_excerpt", "The student is reading this section of \(page):")
+        case "reply":
+            let whose = p != nil && q.provider == p ? "your" : (q.provider?.displayName ?? "an assistant") + "’s"
+            (tag, intro) = ("answer_excerpt", otherChat
+                ? "The student selected this part of \(whose) answer in an earlier chat about this deck (not part of this conversation):"
+                : "The student selected this part of \(whose) earlier answer in this chat:")
+        default: (tag, intro) = ("walkthrough_excerpt", "The student selected this passage on \(page):")
+        }
+        func attribute(_ s: String) -> String {
+            s.replacingOccurrences(of: "\"", with: "'").components(separatedBy: .newlines).joined(separator: " ")
+        }
+        var open = "<\(tag) from=\"\(attribute(q.source))\""
+        if let s = q.section, !s.isEmpty { open += " where=\"\(attribute(s))\"" }
+        let text = q.text.replacingOccurrences(of: "</\(tag)>", with: "</ \(tag)>")
+        return "\(intro)\n\(open)>\n\(text)\n</\(tag)>\n"
+    }
+
     /// Slide numbers mentioned in a question: "slide 5", "slides 5-8", "p. 3", "pages 3 and 7", "slides 2, 4, and 9",
-    /// "slide #4", "pg 12", "slides 3 through 6".
-    static func referencedSlides(in text: String, pageCount: Int) -> [Int] {
+    /// "slide #4", "pg 12", "slides 3 through 6". `slidesOnly`: just "slide(s) N", for a question asked with the notes,
+    /// where "p. 12" or "page 7" is a page of the notes.
+    static func referencedSlides(in text: String, pageCount: Int, slidesOnly: Bool = false) -> [Int] {
+        let names = slidesOnly ? "slides?" : #"slides?|pages?|pgs?\.?|pp?\."#
         guard let re = try? NSRegularExpression(
-            pattern: #"\b(?:slides?|pages?|pgs?\.?|pp?\.)\s*(#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?(?:\s*(?:,\s*and|,|and|&)\s*#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?)*)"#,
+            pattern: #"\b(?:\#(names))\s*(#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?(?:\s*(?:,\s*and|,|and|&)\s*#?\d+(?:\s*(?:-|–|—|to|through|thru)\s*#?\d+)?)*)"#,
             options: .caseInsensitive) else { return [] }
         var out: [Int] = []
         let ns = text as NSString

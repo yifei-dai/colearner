@@ -18,6 +18,8 @@
  *          cdnjs, images); it always waits for MathJax (max 20 s); any wheel/touch/mouse/key stops it; -1 = off.
  *   __coLearnerWT.coverage({file? | deck?, pages})  -> {pages, counts:{<match>: n}, byPage:[{page, match, ...}]}
  *   __coLearnerWT.deckKeyFromFile("01b-intro.pdf") -> "01b"   ("7-search.pdf" -> "L7", other names -> "")
+ *   __coLearnerWT.entryAt(node) -> the innermost section / subsection / heading span holding node, or null
+ *       -> {n, title, kind, anchor, path:[titles], titleEls, el, block, end}   (used by walkthrough_ask.js)
  *
  * "page" is always the 1-based PDF page index of the deck shown in the app.
  * Printed slide numbers in the page text are converted per course:
@@ -543,6 +545,42 @@
     return res;
   }
 
+  /* ---------------- where a node sits (walkthrough_ask.js: "Ask about this") ---------------- */
+  /* The innermost section, subsection or heading span holding `node`, or null when none does (the top bar, a mind
+     map): {n, title, kind, anchor, path:[titles, as locate gives them], titleEls, el, block, end}. titleEls are the
+     headings of the path's entries (null where there is none), for reading their titles with math as TeX: titles
+     are textContent, where MathJax's copy for screen readers turns b^m into "bm". A heading span (el = its heading)
+     runs to the next heading of the same or a higher level in its block (end), else to the block's end. */
+  function entryAt(node) {
+    var idx = getIndex(), el = node && (node.nodeType === 1 ? node : node.parentElement);
+    if (!el || idx.family !== "dom") return null;
+    var E = idx.E, blocks = new Map(), block = null;
+    E.forEach(function (e) { if (e.kind !== "heading") blocks.set(e.el, e); });
+    for (var a = el; a && !block; a = a.parentElement) block = blocks.get(a) || null;
+    if (!block) return null;
+    var blockOf = function (h) { while (h && h.kind === "heading") h = h.parent >= 0 ? E[h.parent] : null; return h; };
+    /* the heading spans open at the node, as build() stacks them */
+    var spans = [], end = null;
+    for (var i = block.n + 1; i < E.length; i++) {
+      var h = E[i];
+      if (h.kind !== "heading" || blockOf(h) !== block) continue;
+      if (h.el === el || (h.el.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+        while (spans.length && spans[spans.length - 1].hl >= h.hl) spans.pop();
+        spans.push(h);
+      } else if (!spans.length || h.hl <= spans[spans.length - 1].hl) {
+        end = h.el;
+        break;
+      }
+    }
+    var e = spans.length ? spans[spans.length - 1] : block, path = [], titleEls = [];
+    for (var p = e; p; p = p.parent >= 0 ? E[p.parent] : null) {
+      path.unshift(p.title);
+      titleEls.unshift(p.kind === "heading" ? p.el : p.titleEl);
+    }
+    return { n: e.n, title: e.title, kind: e.kind, anchor: e.anchor, path: path, titleEls: titleEls, el: e.el,
+      block: block.el, end: e === block ? null : end };
+  }
+
   function coverage(q) {
     q = q || {};
     var n = +q.pages, out = { pages: n, counts: { declared: 0, cited: 0, mentioned: 0, "page-range": 0, "nearest-preceding": 0, "before-first": 0, "deck-not-on-page": 0 }, byPage: [] };
@@ -569,5 +607,5 @@
   window.__coLearnerWT = { version: VERSION, index: index, locate: locate, go: go, coverage: coverage,
     deckKeyFromFile: deckKeyFromFile, parseRefs: function (t, ctx, course, numbering) {
       return parseRefs(t, ctx || "", { course: course || detectCourse(), conv: NUMBERING[numbering || defaultNumbering(course || detectCourse())], allowPages: true });
-    }, last: function () { return LAST; }, cancelPin: cancelPin };
+    }, last: function () { return LAST; }, cancelPin: cancelPin, entryAt: entryAt };
 })();

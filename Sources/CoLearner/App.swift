@@ -42,6 +42,12 @@ struct CoLearnerApp: App {
                 }.keyboardShortcut("f", modifiers: [.command, .shift])
                 Button("Select Area of Slide…") { model.beginAreaSelection() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button("Ask About Walkthrough") { model.askAboutWalkthrough() }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                    .disabled(model.currentStudyPages.isEmpty)
+                Button("Select Area of Walkthrough…") { model.beginWalkthroughAreaSelection() }
+                    .keyboardShortcut("a", modifiers: [.command, .option, .shift])
+                    .disabled(model.currentStudyPages.isEmpty)
                 Button("Show Walkthrough") { model.showPanel(.walkthrough) }
                     .keyboardShortcut("2", modifiers: .command)
                 Button("Show Chat") { model.showPanel(.chat) }
@@ -80,6 +86,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// Paste (⌘V, Edit › Paste) that nothing in focus takes (the slides, the thumbnails, a notes PDF): a picture on the
+    /// clipboard goes to the chat. Text boxes, the chat page and study pages handle their own paste first.
+    @objc func paste(_ sender: Any?) {
+        MainActor.assumeIsolated {
+            guard let model, let w = NSApp.keyWindow, w === model.mainWindow || model.popOuts.contains(w),
+                  model.chat.pasteImages() else { NSSound.beep(); return }
+            model.showPanel(.chat)
+            DispatchQueue.main.async { model.chat.focusInput() }
+        }
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {

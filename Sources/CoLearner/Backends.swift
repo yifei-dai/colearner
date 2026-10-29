@@ -346,7 +346,7 @@ final class ClaudeBackend: Backend {
         var content: [[String: Any]] = []
         for img in req.imageURLs {
             guard let data = try? Data(contentsOf: img) else { continue }
-            content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": data.base64EncodedString()]])
+            content.append(["type": "image", "source": ["type": "base64", "media_type": Self.mediaType(img), "data": data.base64EncodedString()]])
         }
         content.append(["type": "text", "text": req.prompt])
         let msg: [String: Any] = ["type": "user", "message": ["role": "user", "content": content]]
@@ -479,6 +479,16 @@ final class ClaudeBackend: Backend {
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
         return env
+    }
+
+    /// Slides and areas are PNG; attached pictures are PNG, or JPEG when large.
+    nonisolated static func mediaType(_ url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        default: return "image/png"
+        }
     }
 
     static var workingDirectory: URL {

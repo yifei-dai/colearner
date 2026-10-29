@@ -22,11 +22,14 @@ struct SlideView: NSViewRepresentable {
         v.frame = container.bounds
         v.autoresizingMask = [.width, .height]
         container.addSubview(v)
-        let overlay = AreaSelectView(pdfView: v)
+        let overlay = AreaSelectView(hint: "Drag over the part of the slide you want · Esc to cancel")
         overlay.frame = container.bounds
         overlay.autoresizingMask = [.width, .height]
         overlay.isActive = { [weak model] in model?.selectingArea ?? false }
-        overlay.onSelect = { [weak model] page, rect in model?.finishAreaSelection(page: page, rect: rect) }
+        overlay.onSelect = { [weak model, weak overlay, weak v] r in
+            guard let v, let area = overlay?.pdfArea(r, in: v) else { return }
+            model?.finishAreaSelection(page: area.page, rect: area.rect)
+        }
         container.addSubview(overlay)
         context.coordinator.overlay = overlay
         return container
@@ -65,22 +68,43 @@ struct SlideView: NSViewRepresentable {
     }
 }
 
-/// Transparent layer over the slide. It takes the mouse only while an area is being selected (after
-/// "Select area" / ⌘⇧A) or while ⌥ is held, so normal clicks, scrolling and arrow keys go to the slide.
+/// Transparent layer over the slide (and over the walkthrough page or notes). It takes the mouse only while an area
+/// is being selected (after "Select area" / ⌘⇧A) or while ⌥ is held, so normal clicks, scrolling and arrow keys go
+/// to the view below.
 final class AreaSelectView: NSView {
-    weak var pdfView: PDFView?
     var isActive: () -> Bool = { false }
-    var onSelect: (PDFPage, CGRect) -> Void = { _, _ in }
+    /// The box that was dragged out, in this view's coordinates.
+    var onSelect: (NSRect) -> Void = { _ in }
+    /// Shown while waiting for the drag.
+    let hint: String
+    /// Its view under the pointer gets the scroll wheel while this layer has the mouse (a long walkthrough page or the
+    /// notes still scroll); nil: as before.
+    weak var scrollTarget: NSView?
     private var start: NSPoint?
     private var current: NSPoint?
     /// The drag began in selection mode (so Esc, which ends the mode, cancels it).
     private var startedInMode = false
 
-    init(pdfView: PDFView) {
-        self.pdfView = pdfView
+    init(hint: String) {
+        self.hint = hint
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// A box from `onSelect` on the PDF page under its middle, in page coordinates.
+    func pdfArea(_ r: NSRect, in pdf: PDFView) -> (page: PDFPage, rect: CGRect)? {
+        let inPDF = convert(r, to: pdf)
+        guard let page = pdf.page(for: NSPoint(x: inPDF.midX, y: inPDF.midY), nearest: true) else { return nil }
+        return (page, pdf.convert(inPDF, to: page).standardized)
+    }
+
+    override func scrollWheel(with e: NSEvent) {
+        guard let t = scrollTarget else { super.scrollWheel(with: e); return }
+        // To the view AppKit would pick without this layer: a PDFView hands a wheel sent to itself up the responder
+        // chain instead of to its own scroll view, so the notes would not move.
+        let hit = t.superview.flatMap { t.hitTest($0.convert(e.locationInWindow, from: nil)) }
+        (hit ?? t).scrollWheel(with: e)
+    }
 
     override var isFlipped: Bool { true }
 
@@ -118,12 +142,10 @@ final class AreaSelectView: NSView {
 
     override func mouseUp(with e: NSEvent) {
         defer { start = nil; current = nil; needsDisplay = true }
-        guard let s = start, let pdf = pdfView, !(startedInMode && !isActive()) else { return }
+        guard let s = start, !(startedInMode && !isActive()) else { return }
         let r = band(s, convert(e.locationInWindow, from: nil))
         guard r.width > 6, r.height > 6 else { return }
-        let inPDF = convert(r, to: pdf)
-        guard let page = pdf.page(for: NSPoint(x: inPDF.midX, y: inPDF.midY), nearest: true) else { return }
-        onSelect(page, pdf.convert(inPDF, to: page).standardized)
+        onSelect(r)
     }
 
     private func band(_ a: NSPoint, _ b: NSPoint) -> NSRect {
@@ -143,7 +165,7 @@ final class AreaSelectView: NSView {
             path.stroke()
         } else if isActive() {
             // A hint while waiting for the drag.
-            let text = "Drag over the part of the slide you want · Esc to cancel" as NSString
+            let text = hint as NSString
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white]
             let size = text.size(withAttributes: attrs)
             let box = NSRect(x: (bounds.width - size.width) / 2 - 10, y: 10, width: size.width + 20, height: size.height + 8)
