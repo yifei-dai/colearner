@@ -215,12 +215,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #areabox #area-label { flex: 1; color: var(--ink); }
 .busynote { color: var(--muted); font-size: 12px; font-style: italic; }
 /* pictures and a quoted passage waiting for the next question; chips wrap in a narrow panel. In a short window they
-   give way first and scroll, so the conversation keeps a quarter of the window; if even that leaves too little room,
-   the top of the chat box is cut rather than Send and the status line. */
+   give way first and scroll, so the conversation keeps a quarter of the window (fitLog in chat.js, as far as the chat
+   box's own rows leave room, and only in a window of 520 px or more); if even the rows don't fit, the top of the chat
+   box is cut rather than Send and the status line. */
 #attachbox { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; min-width: 0; min-height: 0; overflow-y: auto; }
 #composer > #attachbox { flex-shrink: 1; }
 #attachbox > * { flex-shrink: 0; }
-body:has(#attachbox:not([hidden])) #log { min-height: 25vh; }
 body:has(#attachbox:not([hidden])) #composer { justify-content: flex-end; overflow: clip; }
 /* eight pictures one per row would take most of a tall window: the row scrolls instead */
 .att-pics { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-height: 30vh; overflow-y: auto; }
