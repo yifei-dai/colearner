@@ -1,13 +1,14 @@
 #!/bin/bash
-# Builds build/Co-learner.app (release). Pass --install to also copy it to ~/Applications.
+# Builds build/app.noindex/Co-learner.app (release). Pass --install to also copy it to ~/Applications.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 tools/make_library.py >/dev/null
 rm -f .build/release/CoLearner   # so a failed build can't package the previous binary
 swift build -c release 2>&1 | { grep -v "search path .* not found" || true; }
 test -x .build/release/CoLearner
-APP=build/Co-learner.app
-rm -rf "$APP"
+# Spotlight skips folders named *.noindex, so only the installed copy shows up when you search for the app.
+APP=build/app.noindex/Co-learner.app
+rm -rf "build/Co-learner.app" "$APP"   # build/Co-learner.app: where builds before 2026-10-30 put it
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/CoLearner "$APP/Contents/MacOS/Co-learner"
 cp -R Sources/CoLearner/Web "$APP/Contents/Resources/Web"

@@ -93,7 +93,7 @@ Needs only the Command Line Tools (no Xcode):
 scripts/build_app.sh --install
 ```
 
-This builds `build/Co-learner.app` and copies it to `~/Applications`. For a quick debug run: `swift run`.
+This builds `build/app.noindex/Co-learner.app` and copies it to `~/Applications` (Spotlight skips `.noindex` folders, so a search finds only the installed copy). For a quick debug run: `swift run`.
 
 Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships only with Xcode, so the code avoids `@State`.
 
@@ -146,6 +146,7 @@ Verified on 2026-10-18: all 23 tests across four suites passed, and the optimize
 
 ## Changelog
 
+- 2026-10-30 (no version change): the build script stages the app in `build/app.noindex/`, so Spotlight lists only the installed copy.
 - **0.1.9** (2026-10-28): attach screenshots and other pictures to a question (⌘V, drop, or 📎 Screenshot); ask about the walkthrough: select text and click *Ask about this*, *Ask* for the section you are reading or the notes page, or capture a box of the walkthrough; *Reply* to a selected part of an answer. Quoted passages keep their math as TeX, are saved with the question and found by Search; the other assistant is told what went with earlier questions. The clipboard is read only inside a paste, as macOS requires. Pictures and a quote from a question nobody answered come back to the chat box. Reviewed in two rounds (five, then four independent reviewers, each finding checked by a verifier); all confirmed findings are fixed and the fixes verified again. 125 offline tests in 14 suites.
 - **0.1.8** (2026-10-18): add a saved Fast mode toggle to the ChatGPT model selector and Settings, with Fast labels on the selector and answers. Keeps model and reasoning effort unchanged and explicitly applies Fast or standard speed to new and resumed turns. Includes offline CLI and WebKit coverage.
 - **0.1.7** (2026-10-18): search saved chats across decks with ⇧⌘F, matching excerpts and direct navigation to the conversation, slide and highlighted message. Click slide references in assistant answers to see their source while keeping the answer visible. Includes offline search, navigation and real WebKit regression coverage.
