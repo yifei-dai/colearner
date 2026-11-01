@@ -77,6 +77,8 @@
   let config = {};
   // {claude: {windows:[{label, percent, resetsAt}], updated}, codex: {...}} — from Swift
   let usage = {};
+  // Signing an assistant in again after its login expired: {claude: "idle"|"waiting"|"signedIn"|"failed", codex: …}.
+  let signIn = {};
   const elById = new Map();
   const pendingRender = new Map();
   let rafQueued = false;
@@ -669,6 +671,13 @@
       } else {
         sec.appendChild(el("div", "u-reset", u && u.loading ? "Checking…" : (u && u.error) || "No data yet."));
       }
+      if (u && u.signedOut && !u.loading) {
+        const waiting = signIn[p] === "waiting";
+        const b = el("button", "primary u-signin", waiting ? "Open sign-in again" : "Sign in to " + NAMES[p]);
+        b.onclick = () => post({ type: "signIn", provider: p });
+        sec.appendChild(b);
+        if (waiting) sec.appendChild(el("div", "u-reset", "Finish in your browser (click Authorize); this updates by itself."));
+      }
       if (u && u.error && u.windows && u.windows.length) sec.appendChild(el("div", "u-err", "Last refresh failed: " + u.error));
       popEl.appendChild(sec);
     }
@@ -727,6 +736,14 @@
     let any = false;
     for (const p of ["claude", "codex"]) {
       const u = usage[p];
+      if (u && u.signedOut) {
+        any = true;
+        const span = el("span", "u");
+        span.appendChild(el("b", "", NAMES[p] + " "));
+        span.appendChild(el("span", "warn", "signed out"));
+        box.appendChild(span);
+        continue;
+      }
       if (!u || !u.windows || !u.windows.length) continue;
       any = true;
       const span = el("span", "u");
@@ -980,6 +997,7 @@
       er.textContent = m.error;
       el.appendChild(er);
     }
+    if (m.role === "assistant" && m.status === "error" && isLatestAnswer(m)) el.appendChild(retryRow(m));
     if (m.status !== "streaming" && m.text) {
       const tools = document.createElement("div");
       tools.className = "tools";
@@ -988,6 +1006,65 @@
       cp.onclick = () => { post({ type: "copy", text: m.text }); cp.textContent = "Copied"; setTimeout(() => (cp.textContent = "Copy"), 1200); };
       tools.appendChild(cp);
       el.appendChild(tools);
+    }
+  }
+
+  // ---------- after a failed answer: Sign in (expired login) / Ask again ----------
+  function isLatestAnswer(m) {
+    const i = state.messages.findIndex((x) => x.id === m.id);
+    return i >= 0 && !state.messages.slice(i + 1).some((x) => x.role === "assistant" && x.provider === m.provider);
+  }
+  function answering(p) {
+    return state.messages.some((x) => x.role === "assistant" && x.status === "streaming" && x.provider === p);
+  }
+  function retryRow(m) {
+    const p = m.provider || "claude";
+    const phase = signIn[p] || "idle";
+    const row = el("div", "retry");
+    const again = el("button", "", "Ask again");
+    again.title = "Ask " + NAMES[p] + " the same question again";
+    again.onclick = () => askAgain(m);
+    if (m.needsSignIn && phase !== "signedIn") {
+      const b = el("button", "primary", phase === "waiting" ? "Open sign-in again" : "Sign in to " + NAMES[p]);
+      b.title = "Opens Terminal and your browser with " + NAMES[p] + "'s own sign-in";
+      b.onclick = () => post({ type: "signIn", provider: p });
+      row.appendChild(b);
+      row.appendChild(again);
+      row.appendChild(el("span", "hint", phase === "waiting"
+        ? "Finish in your browser (click Authorize); this updates by itself."
+        : phase === "failed" ? "That sign-in didn't finish. Try again." : "Opens Terminal and your browser: click Authorize there."));
+    } else {
+      if (m.needsSignIn) row.appendChild(el("span", "ok", "Signed in to " + NAMES[p] + "."));
+      again.className = m.needsSignIn ? "primary" : "";
+      row.appendChild(again);
+    }
+    return row;
+  }
+  /// The same question to the same assistant (Swift turns to its slide), with what the chat box holds now.
+  function askAgain(m) {
+    const p = m.provider || "claude";
+    if (answering(p)) return;
+    const i = state.messages.findIndex((x) => x.id === m.id);
+    let q = null;
+    for (let j = i - 1; j >= 0; j--) if (state.messages[j].role === "user") { q = state.messages[j]; break; }
+    if (!q) return;
+    if (q.areaThumb && !state.area) {
+      showNote({ text: "That question was about an area of the slide: select it again (✂︎ Select area), then press Ask again.", error: false });
+      return;
+    }
+    if (preparing()) {
+      showNote({ text: "A picture is still being prepared. Ask again in a moment.", error: false });
+      return;
+    }
+    const quote = quoted();
+    post({ type: "askAgain", messageID: m.id, useArea: !!state.area, imageIDs: pics().map((x) => x.id),
+           quoteID: quote ? quote.id : null });
+  }
+  /// Failed answers on screen get their buttons redrawn (a newer answer replaces them; sign-in moved on).
+  function refreshRetryRows() {
+    for (const [id, node] of elById) {
+      const m = state.messages.find((x) => x.id === id);
+      if (m && m.role === "assistant" && m.status === "error") fillMessage(node, m);
     }
   }
 
@@ -1057,6 +1134,7 @@
         fillMessage(el, m);
         elById.set(m.id, el);
         log.appendChild(el);
+        if (m.role === "assistant") refreshRetryRows();
         renderHeader();
         if (stick || m.role === "user") toBottom();
         return;
@@ -1088,6 +1166,11 @@
     setConfig(c) {
       config = c || {};
       renderPickers(true);
+    },
+    setSignIn(s) {
+      signIn = s || {};
+      refreshRetryRows();
+      renderUsage();
     },
     setUsage(u) {
       usage = u || {};

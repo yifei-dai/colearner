@@ -30,6 +30,8 @@ struct ChatMessage: Codable, Identifiable, Sendable {
     var images: [MessageImage]?
     /// Text quoted from the deck's walkthrough page or notes that went with the question.
     var quote: ChatQuote?
+    /// The answer failed because the assistant's login expired (the chat offers "Sign in").
+    var needsSignIn: Bool?
 
     /// The dictionary handed to chat.js.
     var js: [String: Any] {
@@ -43,6 +45,7 @@ struct ChatMessage: Codable, Identifiable, Sendable {
         if let areaThumb { d["areaThumb"] = areaThumb }
         if let images, !images.isEmpty { d["images"] = images.map { ["label": $0.label, "thumb": $0.thumb] } }
         if let quote { d["quote"] = quote.js }
+        if needsSignIn == true { d["needsSignIn"] = true }
         return d
     }
 }

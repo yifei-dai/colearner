@@ -26,12 +26,25 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var searchResults: [ChatSearchResult] = []
     private var searchPending = false
     /// Last plan usage per assistant (kept across launches). Updated after every answer and on demand.
-    private struct Usage { var plan: String?; var windows: [UsageWindow]; var updated: Double; var loading = false; var error: String? }
+    private struct Usage {
+        var plan: String?; var windows: [UsageWindow]; var updated: Double; var loading = false; var error: String?
+        var signedOut = false
+    }
+    /// Signing Claude / ChatGPT in again from the chat (a login that expired).
+    let signIn = SignIn()
     private var usage: [Provider: Usage] = [:]
 
     init(model: AppModel) {
         self.model = model
         super.init()
+        signIn.onChange = { [weak self] p, phase in
+            guard let self else { return }
+            self.pushSignIn()
+            if phase == .signedIn {
+                self.usage[p]?.signedOut = false
+                self.refreshUsage(force: true)
+            }
+        }
         let config = WKWebViewConfiguration()
         config.userContentController.add(WeakScriptHandler(self), name: "cl")
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -139,6 +152,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private func finishUsage(_ p: Provider, _ r: UsageFetcher.Result) {
         var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
         u.loading = false
+        u.signedOut = r.signedOut
         if r.windows.isEmpty {
             u.error = r.error
         } else {
@@ -184,9 +198,37 @@ final class ChatController: NSObject, WKNavigationDelegate {
             var e: [String: Any] = ["windows": u.windows.map(\.js), "updated": u.updated, "loading": u.loading]
             if let plan = u.plan { e["plan"] = plan }
             if let err = u.error { e["error"] = err }
+            if u.signedOut { e["signedOut"] = true }
             d[p.rawValue] = e
         }
         js("setUsage", d)
+    }
+
+    // MARK: sign in again / ask again
+
+    /// Opens Terminal with Claude Code's or Codex's own login (the browser shows the Authorize page).
+    func startSignIn(_ p: Provider) {
+        switch p {
+        case .claude: signIn.start(.claude, binary: claude.located?.0, checkIn: ClaudeBackend.workingDirectory)
+        case .codex: signIn.start(.codex, binary: codex.binary, checkIn: nil)
+        }
+    }
+
+    private func pushSignIn() {
+        var d: [String: String] = [:]
+        for p in Provider.allCases { d[p.rawValue] = (signIn.phase[p] ?? .idle).rawValue }
+        js("setSignIn", d)
+    }
+
+    /// "Ask again" on an answer that failed: the same question, to the same assistant, on the slide it was asked on,
+    /// with what the chat box holds now (an unanswered question's pictures and quote come back there).
+    func askAgain(messageID: String, useArea: Bool, imageIDs: [String], quoteID: String?) {
+        guard let deck = model.deck else { return }
+        let conv = store.current(deck.path)
+        guard let i = conv.messages.firstIndex(where: { $0.id == messageID }), let p = conv.messages[i].provider,
+              let q = conv.messages[..<i].last(where: { $0.role == .user }) else { return }
+        if let page = q.page, page != model.page, page >= 1, page <= model.pageCount { model.page = page }
+        send(text: q.text, display: q.display, choice: p.rawValue, useArea: useArea, imageIDs: imageIDs, quoteID: quoteID)
     }
 
     func focusInput() {
@@ -497,6 +539,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             showCurrent()
             pushConfig()
             loadUsage()
+            pushSignIn()
             refreshModels()
             if searchPending { searchPending = false; openSearch() }
         case "searchChats":
@@ -538,6 +581,12 @@ final class ChatController: NSObject, WKNavigationDelegate {
             if p != model.provider { model.provider = p }
             send(text: text, display: display, choice: p, useArea: body["useArea"] as? Bool ?? true,
                  imageIDs: body["imageIDs"] as? [String] ?? [], quoteID: body["quoteID"] as? String)
+        case "signIn":
+            guard let p = Provider(rawValue: body["provider"] as? String ?? "") else { return }
+            startSignIn(p)
+        case "askAgain":
+            askAgain(messageID: body["messageID"] as? String ?? "", useArea: body["useArea"] as? Bool ?? false,
+                     imageIDs: body["imageIDs"] as? [String] ?? [], quoteID: body["quoteID"] as? String)
         case "stop":
             let ps = (body["providers"] as? [String])?.compactMap(Provider.init(rawValue:))
             stopVisible(providers: ps.map(Set.init))
@@ -864,6 +913,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             case .failed(let e):
                 m.status = .error
                 m.error = e
+                m.needsSignIn = SignIn.isSignInError(e, provider) ? true : nil
                 m.activity = nil
                 finished = true
                 // Only a missing/broken session is dropped (then the next question re-sends the deck);

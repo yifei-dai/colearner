@@ -111,9 +111,8 @@ final class CodexBackend: Backend {
     }
 
     static func withHint(_ e: String) -> String {
-        let l = e.lowercased()
-        if l.contains("401") || l.contains("unauthorized") || l.contains("login") || l.contains("not logged in") {
-            return e + "\n\nFix: open Terminal, run `codex login`, then ask again."
+        if SignIn.isSignInError(e, .codex) {
+            return e + "\n\nChatGPT's sign-in has expired: press Sign in to ChatGPT below, then Ask again."
         }
         return e
     }
@@ -498,9 +497,8 @@ final class ClaudeBackend: Backend {
     }
 
     static func withHint(_ e: String) -> String {
-        let l = e.lowercased()
-        if l.contains("/login") || l.contains("not logged in") || l.contains("authentication") || l.contains("oauth") || l.contains("401") {
-            return e + "\n\nFix: open Terminal, run `claude`, type /login and sign in, then ask again here."
+        if SignIn.isSignInError(e, .claude) {
+            return e + "\n\nClaude's sign-in has expired: press Sign in to Claude below, then Ask again."
         }
         return e
     }

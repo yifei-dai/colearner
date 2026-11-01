@@ -14,6 +14,11 @@ struct CoLearnerApp: App {
         }
         .defaultSize(width: 1440, height: 860)
         .commands {
+            CommandGroup(after: .appSettings) {
+                // When a login expires: the tool's own sign-in, in Terminal and the browser.
+                Button("Sign In to Claude…") { model.chat.startSignIn(.claude) }
+                Button("Sign In to ChatGPT…") { model.chat.startSignIn(.codex) }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") { model.openNewTab() }.keyboardShortcut("t")
                 Button("Open PDF…") { model.openPDFPanel() }.keyboardShortcut("o")
@@ -120,6 +125,9 @@ struct SettingsView: View {
                     ForEach(ModelCatalog.model(.claude, model.claudeModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
                 }
                 LabeledContent("Claude Code", value: model.chat.claude.versionString)
+                LabeledContent("Sign-in expired?") {
+                    Button("Sign In to Claude…") { model.chat.startSignIn(.claude) }
+                }
             }
             Section("ChatGPT (Codex)") {
                 Picker("Model", selection: $model.codexModel) {
@@ -129,6 +137,9 @@ struct SettingsView: View {
                     ForEach(ModelCatalog.model(.codex, model.codexModel)?.efforts ?? [], id: \.self) { Text($0).tag($0) }
                 }
                 Toggle("Fast mode", isOn: $model.codexFastMode)
+                LabeledContent("Sign-in expired?") {
+                    Button("Sign In to ChatGPT…") { model.chat.startSignIn(.codex) }
+                }
             }
             Section("Appearance") {
                 Picker("Appearance", selection: $model.appearance) {

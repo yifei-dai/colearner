@@ -7,6 +7,8 @@ enum UsageFetcher {
         var plan: String?
         var windows: [UsageWindow]
         var error: String?
+        /// The tool says it isn't signed in (the usage card then offers "Sign in").
+        var signedOut = false
     }
 
     // MARK: Claude
@@ -16,10 +18,12 @@ enum UsageFetcher {
                               "--strict-mcp-config", "--setting-sources", ""], env: env, cwd: cwd, timeout: 25)
         let auth = run(bin, ["auth", "status"], env: env, cwd: cwd, timeout: 10)
         var plan: String?
-        if let o = (try? JSONSerialization.jsonObject(with: Data(auth.utf8))) as? [String: Any],
-           let sub = o["subscriptionType"] as? String {
-            plan = sub.prefix(1).uppercased() + sub.dropFirst()
+        var signedOut = false
+        if let o = (try? JSONSerialization.jsonObject(with: Data(auth.utf8))) as? [String: Any] {
+            if let sub = o["subscriptionType"] as? String { plan = sub.prefix(1).uppercased() + sub.dropFirst() }
+            signedOut = o["loggedIn"] as? Bool == false
         }
+        if signedOut { return Result(plan: nil, windows: [], error: "Not signed in.", signedOut: true) }
         guard let o = (try? JSONSerialization.jsonObject(with: Data(usage.utf8))) as? [String: Any],
               let text = o["result"] as? String else {
             return Result(plan: plan, windows: [], error: "Claude Code did not return usage.")
@@ -71,7 +75,8 @@ enum UsageFetcher {
         }
         guard let reply else { return Result(plan: nil, windows: [], error: "Codex did not answer (is it logged in?).") }
         if let err = reply["error"] as? [String: Any] {
-            return Result(plan: nil, windows: [], error: err["message"] as? String ?? "Codex error")
+            let m = err["message"] as? String ?? "Codex error"
+            return Result(plan: nil, windows: [], error: m, signedOut: SignIn.isSignInError(m, .codex))
         }
         guard let result = reply["result"] as? [String: Any], let rl = result["rateLimits"] as? [String: Any] else {
             return Result(plan: nil, windows: [], error: "No rate limits in Codex's answer.")
