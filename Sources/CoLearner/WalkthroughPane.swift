@@ -376,10 +376,10 @@ struct WalkthroughPane: View {
     }
 
     private func sync() {
-        let deckFile = model.deck?.url.lastPathComponent ?? ""
+        let deckFile = model.deck?.knownFile ?? ""
         if let p = model.currentStudyPage, p.isPDF {
             model.walk.show(nil, slide: model.page, follow: false)
-            model.studyPDF.show(p, deckFile: deckFile, slide: model.page, follow: model.followSlides)
+            model.studyPDF.show(p, deckFile: model.deck?.scribeFile(p.path) ?? deckFile, slide: model.page, follow: model.followSlides)
         } else {
             model.walk.deckFile = deckFile
             model.walk.show(model.currentStudyPage, slide: model.page, follow: model.followSlides)

@@ -105,6 +105,12 @@ struct Conversation: Codable, Identifiable, Sendable {
             seenSlides?[p.rawValue] = nil
         }
     }
+    /// The same sources under a new stamp: keep the session, take the stamp.
+    mutating func restamp(_ revision: String, for provider: Provider) {
+        var revisions = contextRevisions ?? [:]
+        revisions[provider.rawValue] = revision
+        contextRevisions = revisions
+    }
     /// Preserve the visible conversation, but rebuild a provider's context when its sources change.
     @discardableResult
     mutating func prepareContext(_ revision: String, for provider: Provider) -> Bool {
@@ -264,22 +270,7 @@ final class ChatStore {
             writeNow = true
         }
         chats.threads = nil
-        // A crash can leave optimistic seen markers for a turn the CLI never received. Its session
-        // cannot safely resume: rebuild only the affected provider, keeping the visible transcript.
-        for ci in (chats.conversations ?? []).indices {
-            for mi in chats.conversations![ci].messages.indices where chats.conversations![ci].messages[mi].status == .streaming {
-                let provider = chats.conversations![ci].messages[mi].provider
-                chats.conversations![ci].messages[mi].status = .stopped
-                chats.conversations![ci].messages[mi].activity = nil
-                if !chats.conversations![ci].messages[mi].text.isEmpty {
-                    chats.conversations![ci].messages[mi].notInSession = true
-                }
-                for p in provider.map({ [$0] }) ?? Provider.allCases {
-                    chats.conversations![ci].setSession(nil, for: p)
-                }
-                needSave = true
-            }
-        }
+        if Self.repairInterrupted(&chats) { needSave = true }
         if (chats.conversations ?? []).isEmpty {
             let c = Conversation()
             chats.conversations = [c]
@@ -318,6 +309,27 @@ final class ChatStore {
         return chats
     }
 
+    /// A crash can leave optimistic seen markers for a turn the CLI never received. Its session cannot safely
+    /// resume: rebuild only the affected provider, keeping the visible transcript. True if anything changed.
+    private static func repairInterrupted(_ chats: inout DeckChats) -> Bool {
+        var changed = false
+        for ci in (chats.conversations ?? []).indices {
+            for mi in chats.conversations![ci].messages.indices where chats.conversations![ci].messages[mi].status == .streaming {
+                let provider = chats.conversations![ci].messages[mi].provider
+                chats.conversations![ci].messages[mi].status = .stopped
+                chats.conversations![ci].messages[mi].activity = nil
+                if !chats.conversations![ci].messages[mi].text.isEmpty {
+                    chats.conversations![ci].messages[mi].notInSession = true
+                }
+                for p in provider.map({ [$0] }) ?? Provider.allCases {
+                    chats.conversations![ci].setSession(nil, for: p)
+                }
+                changed = true
+            }
+        }
+        return changed
+    }
+
     /// The conversation shown for this deck.
     func current(_ deckPath: String) -> Conversation {
         let c = load(deckPath)
@@ -325,12 +337,12 @@ final class ChatStore {
     }
 
     func conversation(_ deckPath: String, _ id: String) -> Conversation? {
-        load(deckPath).conversations?.first { $0.id == id }
+        return load(deckPath).conversations?.first { $0.id == id }
     }
 
     /// All conversations of a deck, newest first.
     func conversations(_ deckPath: String) -> [Conversation] {
-        (load(deckPath).conversations ?? []).sorted { $0.created > $1.created }
+        return (load(deckPath).conversations ?? []).sorted { $0.created > $1.created }
     }
 
     /// Search does not load/migrate histories. Active in-memory histories override their disk snapshots.
@@ -346,7 +358,7 @@ final class ChatStore {
     /// Resolve by message ID after opening a search result. Unmigrated legacy chats do not yet have a
     /// persistent conversation ID; loading them here is intentional, after the user chose a result.
     func locateMessage(deckPath: String, messageID: String) -> Conversation? {
-        load(deckPath).conversations?.first { $0.messages.contains { $0.id == messageID } }
+        return load(deckPath).conversations?.first { $0.messages.contains { $0.id == messageID } }
     }
 
     /// Slides that have messages in the current conversation (thumbnail dots, "other slides" chips).
@@ -402,4 +414,121 @@ final class ChatStore {
         guard let d = try? enc.encode(chats) else { return false }
         return (try? d.write(to: fileURL(deckPath), options: .atomic)) != nil
     }
+    // MARK: renamed or moved PDFs
+
+    /// A deck's PDF was renamed or moved (or a folder above it): its chats go to the new path. Every file of the deck
+    /// takes the new name and the deck path inside is patched. If the new path already had chats (a PDF put where
+    /// another one was), both lists of conversations end up in one file and nothing is dropped; the moving deck's
+    /// old files are kept aside.
+    func move(_ m: PathMove) {
+        var pairs: [(old: String, new: String)] = []
+        for p in decks.keys.sorted() { if let n = m.apply(p), n != p { pairs.append((p, n)) } }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names.sorted() {
+            guard let p = mainFileDeck(name), let n = m.apply(p), n != p, !pairs.contains(where: { $0.old == p }) else { continue }
+            pairs.append((p, n))
+        }
+        for (p, n) in pairs { moveDeck(p, to: n) }
+    }
+
+    /// The deck a deck's own chat file (`<base>.chat2.json`, or the v1 `<base>.json`) belongs to; nil for any other file.
+    private func mainFileDeck(_ name: String) -> String? {
+        guard name.hasSuffix(".json"), let p = Self.deckPath(in: directory.appendingPathComponent(name)) else { return nil }
+        return name == base(p) + ".chat2.json" || name == base(p) + ".json" ? p : nil
+    }
+
+    private func moveDeck(_ p: String, to n: String) {
+        let fm = FileManager.default
+        let source = decks.removeValue(forKey: p), target = decks[n]
+        let wasReadOnly = readOnly.remove(p) != nil
+        let from = base(p), to = base(n)
+        let names = (try? fm.contentsOfDirectory(atPath: directory.path)) ?? []
+        let mine = names.filter { $0.hasPrefix(from + ".") }
+        let theirs = names.filter { $0.hasPrefix(to + ".") }
+        if theirs.isEmpty && target == nil {
+            // The usual case, nothing at the new path yet: the deck's files take the new name.
+            for f in mine {
+                let dst = directory.appendingPathComponent(to + f.dropFirst(from.count))
+                guard (try? fm.moveItem(at: directory.appendingPathComponent(f), to: dst)) != nil else { continue }
+                Self.setDeckPath(n, in: dst)
+            }
+            if wasReadOnly { readOnly.insert(n) }
+            if var c = source {
+                // In memory it may be newer than on disk (an answer still streaming): it stays, under the new path.
+                c.deckPath = n
+                decks[n] = c
+                save(n)
+            }
+            return
+        }
+        // Chats at both paths: one list of conversations under the new path.
+        var a = source ?? decode(fileURL(p))
+        var b = target ?? decode(fileURL(n))
+        let targetUnreadable = target == nil && fm.fileExists(atPath: fileURL(n).path) && b == nil
+        let stamp = Int(Date().timeIntervalSince1970)
+        func setAside(_ files: [String]) {
+            for f in files {
+                try? fm.moveItem(at: directory.appendingPathComponent(f), to: directory.appendingPathComponent(f + ".moved-\(stamp)"))
+            }
+        }
+        guard !wasReadOnly, !targetUnreadable, a != nil else {
+            // One side can't be read: nothing is merged or overwritten; the moving deck's files are kept aside.
+            setAside(mine)
+            return
+        }
+        if source == nil, a != nil { _ = Self.repairInterrupted(&a!) }
+        if target == nil, b != nil { _ = Self.repairInterrupted(&b!) }
+        let merged = b.map { Self.merged(a!, onto: $0, at: n) } ?? { var c = a!; c.deckPath = n; return c }()
+        guard let data = try? Self.encoder.encode(merged), (try? data.write(to: fileURL(n), options: .atomic)) != nil else {
+            if let source { decks[p] = source }   // nothing changed on disk: keep it where it was
+            if wasReadOnly { readOnly.insert(p) }
+            return
+        }
+        setAside(mine)
+        if source != nil || target != nil { decks[n] = merged }
+    }
+
+    /// `s`'s chats moved onto `t`'s path `n`: every conversation with messages from both, `s`'s current one if it
+    /// has messages (else `t`'s).
+    private static func merged(_ s: DeckChats, onto t: DeckChats, at n: String) -> DeckChats {
+        var out = s
+        out.deckPath = n
+        let mine = (s.conversations ?? []).filter { !$0.isEmpty }
+        let ids = Set(mine.map(\.id))
+        let all = mine + (t.conversations ?? []).filter { !$0.isEmpty && !ids.contains($0.id) }
+        out.conversations = all.isEmpty ? s.conversations : all
+        let list = out.conversations ?? []
+        if !list.contains(where: { $0.id == out.current }) {
+            out.current = list.contains(where: { $0.id == t.current }) ? t.current : list.last?.id
+        }
+        if s.importedV1 != nil || t.importedV1 != nil {
+            out.importedV1 = Array(Set(s.importedV1 ?? []).union(t.importedV1 ?? [])).sorted()
+        }
+        return out
+    }
+
+    private static var encoder: JSONEncoder {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return enc
+    }
+
+    /// The deck path a chat file (either format) was written for.
+    private static func deckPath(in url: URL) -> String? {
+        guard let d = try? Data(contentsOf: url),
+              let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return nil }
+        return o["deckPath"] as? String
+    }
+
+    /// Changes only the deck path in a chat file, leaving everything else as it was written.
+    private static func setDeckPath(_ path: String, in url: URL) {
+        guard let d = try? Data(contentsOf: url),
+              var o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any], o["deckPath"] is String else { return }
+        o["deckPath"] = path
+        if let out = try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys]) {
+            try? out.write(to: url, options: .atomic)
+        }
+    }
 }
+

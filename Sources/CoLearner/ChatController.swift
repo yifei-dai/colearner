@@ -284,7 +284,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         // The page may return only a native-issued result ID, never an arbitrary file path.
         guard let result = searchResults.first(where: { $0.id == id }),
               let destination = ChatNavigation.destination(for: result, store: store,
-                  decks: model.courses.flatMap(\.decks) + model.openDecks) else {
+                  decks: [model.deck(path: result.deckPath)].compactMap { $0 } + model.openDecks) else {
             pushSearchResults(error: "This message is no longer available. Search again to refresh the results.")
             return
         }
@@ -338,6 +338,15 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     private func isVisible(_ deck: String, _ conv: String) -> Bool {
         model.deck?.path == deck && store.current(deck).id == conv
+    }
+
+    /// PDFs were renamed or moved: running answers, the selected area and the quote follow their deck.
+    func followMoves(_ follow: (String) -> String) {
+        runWhere = runWhere.mapValues { (deck: follow($0.deck), conv: $0.conv) }
+        askedWith = askedWith.mapValues { a in var a = a; a.deck = follow(a.deck); return a }
+        if let a = area { area?.deck = follow(a.deck) }
+        quoteDeck = quoteDeck.map(follow)
+        searchResults = searchResults.map { r in var r = r; r.deckPath = follow(r.deckPath); return r }
     }
 
     private func push(_ m: ChatMessage, deck: String, conv: String, immediate: Bool = false) {
@@ -702,9 +711,16 @@ final class ChatController: NSObject, WKNavigationDelegate {
     /// conversations. Cancel affected active runs before their old file manifest can be used again.
     func sourcesDidChange(for deck: Deck) {
         let revision = SourceRevision.context(for: deck)
+        let equivalent = SourceRevision.equivalents(for: deck)
         var changed = false
         for conversation in store.conversations(deck.path) {
-            let affected = Provider.allCases.filter { conversation.contextRevisions?[$0.rawValue] != revision }
+            // Stamped by an earlier version for the same sources: keep the session under the new stamp.
+            let same = Provider.allCases.filter { p in conversation.contextRevisions?[p.rawValue].map(equivalent.contains) ?? false }
+            if !same.isEmpty {
+                store.update(deck.path, conversation.id) { c in for p in same { c.restamp(revision, for: p) } }
+                changed = true
+            }
+            let affected = Provider.allCases.filter { conversation.contextRevisions?[$0.rawValue] != revision && !same.contains($0) }
             guard !affected.isEmpty else { continue }
             for (id, whereAt) in runWhere where whereAt.deck == deck.path && whereAt.conv == conversation.id {
                 guard let p = conversation.messages.first(where: { $0.id == id })?.provider,
@@ -875,6 +891,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     private func apply(_ ev: BackendEvent, id: String, provider: Provider, deck: String, conv: String, usedResume: String?) {
+        // The deck's PDF may have been renamed or moved since the question was sent (followMoves keeps runWhere current).
+        let deck = runWhere[id]?.deck ?? deck
         if case .usage(let w) = ev { setUsage(provider, w); return }
         if case .saved = ev { saved.insert(id); return }
         var updated: ChatMessage?

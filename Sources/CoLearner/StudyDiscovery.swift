@@ -30,7 +30,8 @@ enum StudyDiscovery {
                 guard !name.hasPrefix("."), !isScan(name) else { continue }
                 switch u.pathExtension.lowercased() {
                 case "pdf":
-                    for d in decks where !ScribeMap.pages(notes: u.path, deckFile: d.url.lastPathComponent).isEmpty {
+                    for d in decks where !ScribeMap.pages(notes: u.path, deckFile: d.knownFile).isEmpty
+                        || (d.knownPath != nil && !ScribeMap.pages(notes: u.path, deckFile: d.url.lastPathComponent).isEmpty) {
                         let title = u.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
                         found.pages[d.path, default: []].append(StudyPage(title: title, path: u.path))
                         let tex = u.deletingPathExtension().appendingPathExtension("tex").path
@@ -50,8 +51,30 @@ enum StudyDiscovery {
         return found
     }
 
+    /// Pages already read, by path, until the file changes (the library is read again often: Finder changes, coming
+    /// back to the app).
+    private static var heads: [String: (revision: FileRevision, title: String, header: String)] = [:]
+    private static let headsLock = NSLock()
+
     /// `<title>` and the first header line ("eyebrow") of a page, from its first 256 KB.
     static func headText(_ u: URL) -> (title: String, header: String) {
+        let revision = FileRevision.read(u.path)
+        if let revision {
+            headsLock.lock()
+            let cached = heads[u.path]
+            headsLock.unlock()
+            if let cached, cached.revision == revision { return (cached.title, cached.header) }
+        }
+        let read = readHead(u)
+        if let revision {
+            headsLock.lock()
+            heads[u.path] = (revision, read.title, read.header)
+            headsLock.unlock()
+        }
+        return read
+    }
+
+    private static func readHead(_ u: URL) -> (title: String, header: String) {
         guard let h = try? FileHandle(forReadingFrom: u) else { return ("", "") }
         defer { try? h.close() }
         let data = (try? h.read(upToCount: 262_144)) ?? Data()
@@ -71,11 +94,13 @@ enum StudyDiscovery {
 
     // MARK: matching
 
-    /// The short code a deck file starts with: "01a" (01a-...), "7" (7-...), "W4L1" (week and lecture), or nil.
+    /// The short code a deck file starts with: "01a" (01a-...), "7" (7-...), "W4L1" (week and lecture), or nil. A renamed deck
+    /// keeps the code of the name it was first listed under.
     static func deckKey(_ d: Deck) -> String? {
-        let n = d.url.lastPathComponent
-        for p in [#"^\d{2}[ab](?=-)"#, #"^\d+(?=-)"#, #"^W\d+L\d+"#] {
-            if let r = n.range(of: p, options: .regularExpression) { return String(n[r]).lowercased() }
+        for n in [d.knownFile, d.url.lastPathComponent] {
+            for p in [#"^\d{2}[ab](?=-)"#, #"^\d+(?=-)"#, #"^W\d+L\d+"#] {
+                if let r = n.range(of: p, options: .regularExpression) { return String(n[r]).lowercased() }
+            }
         }
         return nil
     }
@@ -111,7 +136,9 @@ enum StudyDiscovery {
         // 3. Title words against deck titles; a word shared by fewer decks counts more.
         let pageWords = words(title.isEmpty ? header : title)
         guard !pageWords.isEmpty else { return [] }
-        let deckWords = decks.map { words($0.title + " " + $0.url.deletingPathExtension().lastPathComponent) }
+        let deckWords = decks.map { d in
+            words([d.knownTitle ?? "", d.title, URL(fileURLWithPath: d.knownFile).deletingPathExtension().lastPathComponent].joined(separator: " "))
+        }
         var df: [String: Int] = [:]
         for ws in deckWords { for w in ws { df[w, default: 0] += 1 } }
         let weight = { (w: String) -> Double in 1.0 / Double(max(df[w] ?? 0, 1)) }

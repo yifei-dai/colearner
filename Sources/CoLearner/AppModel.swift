@@ -7,7 +7,14 @@ enum RightTab: String, CaseIterable { case chat, walkthrough }
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var courses: [Course] = []
+    /// The lecture page's sections and every deck they list (see Sections.swift).
+    @Published private(set) var library = LibraryContents()
+    /// The sections as saved in sections.json.
+    private(set) var sectionsFile = SectionsFile()
+    /// library.json as last read.
+    private var libraryFile: LibraryFile?
+    /// The tabs of the last session are back (until then, nothing may save the session over them).
+    private var sessionRestored = false
     @Published private(set) var libraryRevision = 0
     @Published var openDecks: [Deck] = []
     /// A browser-style "New Tab" (shows the lecture list; picking a lecture opens it there).
@@ -173,6 +180,16 @@ final class AppModel: ObservableObject {
         return w
     }()
     lazy var studyPDF = StudyPDFController()
+    /// The lecture page under a New Tab.
+    lazy var libraryOutline: LibraryOutline = {
+        let o = LibraryOutline()
+        o.actions = self
+        return o
+    }()
+    /// PDFs renamed or moved in Finder keep their chats, links and place (files.json).
+    let tracker = FileTracker()
+    /// Reads the linked folders again when something in them changes.
+    private lazy var watcher = LibraryWatcher { [weak self] in self?.reloadLibrary(quiet: true) }
     let thumbs = ThumbStore()
 
     var deckID: String { deck?.path ?? "" }
@@ -185,6 +202,10 @@ final class AppModel: ObservableObject {
         reloadLibrary()
         restoreSession()
         installArrowKeys()
+        // Coming back to the app: anything renamed, moved or added in Finder meanwhile shows.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadLibrary(quiet: true) }
+        }
     }
 
     /// The chosen models must exist and be shown in the menu; otherwise take the first one shown.
@@ -234,14 +255,38 @@ final class AppModel: ObservableObject {
 
     // MARK: library
 
-    func reloadLibrary() {
-        let (loaded, denied) = Library.load()
-        courses = loaded
+    /// Reads the sections' folders and PDFs again (at launch, after a change to the sections, when Finder changes a
+    /// linked folder, when the app comes to the front, and from Refresh). PDFs renamed or moved since the last time
+    /// take their chats, links and tabs along first. Nothing is redrawn when nothing changed.
+    func reloadLibrary(quiet: Bool = false) {
+        let file = Library.readFile()
+        libraryFile = file
+        let stored = SectionsStore.load()
+        var sections = stored ?? Library.initialSections(file)
+        // Linked folders and PDFs that were renamed or moved are read at their new place; then each listed PDF that
+        // was renamed or moved takes its own state along (chats, links, slide, tabs).
+        for m in tracker.followLinks(&sections) { sections.move(path: m.old, to: m.new) }
+        var (contents, denied) = LibraryScanner.read(sections)
+        let moved = tracker.followFiles(listed: contents.flatMap(\.files))
+        if !moved.files.isEmpty || !moved.folders.isEmpty {
+            applyMoves(moved.files, sections: &sections)
+            for m in moved.folders { sections.move(path: m.old, to: m.new) }
+            (contents, denied) = LibraryScanner.read(sections)
+        }
+        // Without library.json the first sections would be empty: don't keep them, so the next launch tries again.
+        if sections != stored && (stored != nil || file != nil) { SectionsStore.save(sections) }
+        sectionsFile = sections
+        tracker.register(contents.flatMap(\.files))
+        let fresh = LibraryContents(sections: contents, decks: Library.decks(for: contents, file: file, aliases: tracker.aliases),
+                                    denied: denied)
+        watcher.watch(sections)
+        guard !quiet || fresh != library || libraryRevision == 0 else { return }
+        library = fresh
+        libraryOutline.show(contents, file: sections)
         folderAccessDenied = denied
         // Refresh open tabs with the new library data (links may have changed).
-        let all = Dictionary(courses.flatMap(\.decks).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
-        openDecks = openDecks.map { all[$0.path] ?? $0 }
-        if let d = deck, var fresh = all[d.path] {
+        openDecks = openDecks.map { deck(path: $0.path) ?? $0 }
+        if let d = deck, var fresh = deck(path: d.path) {
             fresh.layout = d.layout   // keep the slide frames measured when the deck was opened
             deck = fresh
         }
@@ -252,8 +297,69 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The deck for a PDF: as the sections list it, or (a tab or chat whose PDF no section lists) made the same way.
     func deck(path: String) -> Deck? {
-        courses.flatMap(\.decks).first { $0.path == path }
+        library.decks[path] ?? Library.looseDeck(path: path, file: libraryFile, aliases: tracker.aliases)
+    }
+
+    /// Everything kept by a PDF's path follows it to its new place (a rename or move in Finder or in the app, or a
+    /// moved folder): the sections, the tracked files, the chats, walkthrough links, each deck's slide, the tabs.
+    func applyMoves(_ moves: [PathMove], sections: inout SectionsFile) {
+        guard !moves.isEmpty else { return }
+        var moves = moves
+        // Names swapped or passed along (a -> b while b -> c): go through temporary names, so nothing lands twice.
+        if !Set(moves.map(\.old)).isDisjoint(with: moves.map(\.new)) {
+            let parked = moves.map { PathMove(old: $0.old, new: "/.colearner-moving/\(UUID().uuidString)/" + URL(fileURLWithPath: $0.old).lastPathComponent) }
+            moves = parked + zip(parked, moves).map { PathMove(old: $0.new, new: $1.new) }
+        }
+        let follow = { (p: String) in moves.reduce(p) { q, m in m.apply(q) ?? q } }
+        for m in moves {
+            sections.move(path: m.old, to: m.new)
+            chat.store.move(m)
+        }
+        tracker.moved(moves)
+        chat.followMoves(follow)
+
+        let links = Library.loadUserLinks()
+        let moved = links.following(follow)
+        if (try? JSONEncoder().encode(moved)) != (try? JSONEncoder().encode(links)) { Library.saveUserLinks(moved) }
+        PathMove.moveDefaults(in: .standard, follow)
+
+        openDecks = openDecks.map { d in var d = d; d.path = follow(d.path); return d }
+        if var d = deck, follow(d.path) != d.path {
+            d.path = follow(d.path)
+            deck = d
+            // Only the name changed (same file, same content): the slides on screen stay as they are.
+            if let was = documentRevision, let now = FileRevision.read(d.path), now.inode == was.inode, now.size == was.size,
+               now.modifiedSeconds == was.modifiedSeconds, now.modifiedNanoseconds == was.modifiedNanoseconds {
+                documentRevision = now
+                documentThumbnailKey = "\(d.path)|\(String(describing: now))|\(d.layout.frames ?? [])"
+            }
+            refreshChatPages()
+        }
+        selectedStudyPage = Dictionary(selectedStudyPage.map { (follow($0.key), $0.value) }) { a, _ in a }
+        // At launch the tabs aren't restored yet (moveDefaults already moved the saved ones): nothing to save.
+        if sessionRestored { saveSession() }
+        chat.showCurrent()
+    }
+
+    /// Renames a listed PDF on disk (Rename File… on the lecture page); its chats and links go along.
+    func renameFile(_ path: String, to name: String) -> String? {
+        let old = URL(fileURLWithPath: path)
+        let target = Library.renameTarget(path, to: name)
+        if let problem = target.problem { return problem }
+        guard let newPath = target.path, newPath != path else { return nil }
+        let new = URL(fileURLWithPath: newPath)
+        // Another file of that name (not just this one with different capitals) is never replaced.
+        if let there = FileRevision.read(new.path), there.inode != FileRevision.read(path)?.inode {
+            return "“\(new.lastPathComponent)” already exists in that folder."
+        }
+        guard Darwin.rename(old.path, new.path) == 0 else { return String(cString: strerror(errno)) }
+        var sections = sectionsFile
+        applyMoves([PathMove(old: path, new: new.path)], sections: &sections)
+        SectionsStore.save(sections)
+        reloadLibrary()
+        return nil
     }
 
     // MARK: opening decks
@@ -467,11 +573,12 @@ final class AppModel: ObservableObject {
         p.message = "Choose a lecture PDF"
         guard p.runModal() == .OK, let url = p.url else { return }
         let path = url.standardizedFileURL.path
-        if deck(path: path) == nil {
-            var links = Library.loadUserLinks()
-            if !links.extraDecks.contains(path) { links.extraDecks.append(path) }
-            Library.saveUserLinks(links)
-            reloadLibrary()
+        // A PDF no section lists yet goes into "Other PDFs" (made again if it was removed).
+        if library.decks[path] == nil {
+            editSections { f in
+                if f.section("other") == nil { f.addSection(named: "Other PDFs", id: "other") }
+                f.link([LinkedItem.make(path: path, kind: .file)], to: "other")
+            }
         }
         if let d = deck(path: path) { open(d) }
     }
@@ -696,9 +803,8 @@ final class AppModel: ObservableObject {
         // A walkthrough page wins; with only notes PDFs, take the one whose slides are closest to this slide
         // (one deck can be split across two notes files).
         if let html = pages.first(where: { !$0.isPDF }) { return html }
-        let file = d.url.lastPathComponent
         func distance(_ p: StudyPage) -> Int {
-            let keys = ScribeMap.pages(notes: p.path, deckFile: file).keys
+            let keys = ScribeMap.pages(notes: p.path, deckFile: d.scribeFile(p.path)).keys
             guard let lo = keys.min(), let hi = keys.max() else { return .max }
             return page < lo ? lo - page : (page > hi ? page - hi : 0)
         }
@@ -731,6 +837,7 @@ final class AppModel: ObservableObject {
         }
         // Nothing resolved (e.g. Desktop access denied, so the library is empty): keep the saved tabs for next time.
         if dropped { saveSession() }
+        sessionRestored = true
     }
 }
 
@@ -741,3 +848,76 @@ private extension NSView {
         return nil
     }
 }
+
+// MARK: - the lecture page's sections
+
+extension AppModel: LibraryActions {
+    func openDeck(at path: String) {
+        if let d = deck(path: path) { open(d) }
+    }
+
+    func editSections(_ change: (inout SectionsFile) -> Void) {
+        var f = sectionsFile
+        change(&f)
+        guard f != sectionsFile else { return }
+        SectionsStore.save(f)
+        reloadLibrary()
+    }
+
+    func noteSections(_ change: (inout SectionsFile) -> Void) {
+        var f = sectionsFile
+        change(&f)
+        guard f != sectionsFile else { return }
+        sectionsFile = f
+        SectionsStore.save(f)
+    }
+
+    func link(_ urls: [URL], to section: String, at index: Int?) {
+        let items = urls.compactMap { u -> LinkedItem? in
+            let path = u.standardizedFileURL.path
+            var dir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &dir),
+                  dir.boolValue || u.pathExtension.lowercased() == "pdf" else { return nil }
+            return LinkedItem.make(path: path, kind: dir.boolValue ? .folder : .file)
+        }
+        guard !items.isEmpty else { return }
+        editSections { $0.link(items, to: section, at: index) }
+    }
+
+    func linkPanel(_ kind: LinkedItem.Kind, to section: String) {
+        let name = sectionsFile.section(section)?.name ?? "this section"
+        let p = NSOpenPanel()
+        p.canChooseDirectories = kind == .folder
+        p.canChooseFiles = kind == .file
+        p.allowsMultipleSelection = true
+        if kind == .file { p.allowedContentTypes = [.pdf] }
+        p.prompt = "Link"
+        p.message = kind == .folder
+            ? "Choose folders to link to “\(name)”. Their PDFs and subfolders show in the section, as they are on disk."
+            : "Choose PDFs to link to “\(name)”."
+        guard p.runModal() == .OK else { return }
+        link(p.urls, to: section, at: nil)
+    }
+
+    /// A new section, named in place on the lecture page (shown in a New Tab if a deck is on screen).
+    func newSection() {
+        if deck != nil || !newTab { openNewTab() }
+        var id = ""
+        editSections { id = $0.addSection(named: "New Section") }
+        libraryOutline.beginRename(section: id)
+    }
+
+    func removeSection(_ id: String) {
+        guard let s = sectionsFile.section(id) else { return }
+        if !s.items.isEmpty {
+            let a = NSAlert()
+            a.messageText = "Remove the section “\(s.name)”?"
+            a.informativeText = "Its folders and PDFs stay where they are on disk; only the section goes."
+            a.addButton(withTitle: "Remove")
+            a.addButton(withTitle: "Cancel")
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        editSections { $0.remove(section: id) }
+    }
+}
+

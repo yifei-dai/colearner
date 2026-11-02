@@ -59,12 +59,8 @@ struct DeckBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Menu {
-                ForEach(model.courses) { c in
-                    Menu(c.name) {
-                        ForEach(c.decks) { d in
-                            Button(d.title) { model.open(d) }
-                        }
-                    }
+                ForEach(model.library.sections) { s in
+                    Menu(s.section.name) { SectionMenu(contents: s) }
                 }
                 Divider()
                 Button("Open a PDF…") { model.openPDFPanel() }
@@ -225,38 +221,74 @@ private struct NewTabChip: View {
     }
 }
 
+/// The lecture page (what a New Tab shows): the sections, with buttons to add one, open a PDF or read the folders
+/// again. The list itself is AppKit (LibraryPage.swift).
 struct WelcomeView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text("Co-learner").font(.largeTitle.bold())
                 Text("Pick a lecture. Ask about the slide you're on; the slide goes with your question.")
                     .foregroundStyle(.secondary)
                 if model.folderAccessDenied {
-                    Text("Co-learner can't read your course folders on the Desktop. Allow it in System Settings › Privacy & Security › Files & Folders (Co-learner › Desktop Folder), then choose Lectures › Reload library.")
+                    Text("Co-learner can't read some linked folders. Allow it in System Settings › Privacy & Security › Files & Folders (Co-learner), then press Refresh.")
                         .foregroundStyle(.red)
                 }
-                ForEach(model.courses) { c in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(c.name).font(.headline)
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), alignment: .leading)], alignment: .leading, spacing: 6) {
-                            ForEach(c.decks) { d in
-                                Button {
-                                    model.open(d)
-                                } label: {
-                                    Text(d.title).lineLimit(1)
-                                }
-                                .buttonStyle(.link)
-                            }
-                        }
-                    }
+                HStack(spacing: 8) {
+                    Button { model.newSection() } label: { Label("New Section", systemImage: "plus") }
+                        .help("Add a section; link folders or PDFs to it now or later")
+                    Button { model.openPDFPanel() } label: { Label("Open a PDF…", systemImage: "doc") }
+                        .help("Open any PDF (it goes into Other PDFs unless a section lists it)")
+                    Button { model.reloadLibrary() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                        .help("Read the linked folders again (Co-learner also notices changes by itself)")
                 }
-                Button("Open another PDF…") { model.openPDFPanel() }
+                .padding(.top, 2)
             }
-            .padding(28)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 12)
+            PanelHost(view: model.libraryOutline.scroll)
+                .padding(.leading, 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// A section in the Lectures menu: what its linked folders hold (subfolders as submenus) and its linked PDFs.
+private struct SectionMenu: View {
+    @EnvironmentObject var model: AppModel
+    let contents: SectionContents
+
+    var body: some View {
+        if contents.links.isEmpty { Text("Nothing linked yet") }
+        ForEach(Array(contents.links.enumerated()), id: \.element.id) { i, l in
+            if i > 0 { Divider() }
+            if let n = l.node {
+                if !n.isFolder {
+                    NodeMenu(node: n)
+                } else if n.children.isEmpty {
+                    Text("\(n.name) (no PDFs)")
+                } else {
+                    ForEach(n.children) { NodeMenu(node: $0) }
+                }
+            } else {
+                Text("\(URL(fileURLWithPath: l.item.path).lastPathComponent) (can't be found)")
+            }
+        }
+    }
+}
+
+private struct NodeMenu: View {
+    @EnvironmentObject var model: AppModel
+    let node: LibraryNode
+
+    var body: some View {
+        if node.isFolder {
+            Menu(node.name) { ForEach(node.children) { NodeMenu(node: $0) } }
+        } else {
+            Button(node.name) { model.openDeck(at: node.path) }
         }
     }
 }

@@ -35,10 +35,12 @@ enum SourceRevision {
         var files: [File]
     }
 
-    /// Sessions are valid only for this deck version and this exact set of linked sources.
-    static func context(for deck: Deck) -> String {
+    /// Sessions are valid only for this deck version and this exact set of linked sources. The title is the one
+    /// library.json gives (as before decks showed their file names), so that change alone keeps sessions.
+    static func context(for deck: Deck, course: String? = nil) -> String {
         let paths = Set([deck.path] + deck.contextFiles + deck.walkthroughs.map(\.path)).sorted()
-        let context = Context(path: deck.path, title: deck.title, course: deck.courseName, layout: deck.layout,
+        let context = Context(path: deck.path, title: deck.knownTitle ?? deck.title, course: course ?? deck.courseName,
+                              layout: deck.layout,
                               pages: deck.walkthroughs.sorted { $0.path < $1.path },
                               files: paths.map { File(path: $0, revision: FileRevision.read($0)) })
         let encoder = JSONEncoder()
@@ -46,5 +48,11 @@ enum SourceRevision {
         // All fields above are finite file metadata and library values.
         let data = (try? encoder.encode(context)) ?? Data(UUID().uuidString.utf8)
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Revisions an earlier version stored for this same deck and sources: a PDF opened by hand used to be in course
+    /// "Other PDFs" and now takes its course folder's name. A session stamped with one of these is kept.
+    static func equivalents(for deck: Deck) -> Set<String> {
+        deck.courseName == "Other PDFs" ? [] : [context(for: deck, course: "Other PDFs")]
     }
 }
