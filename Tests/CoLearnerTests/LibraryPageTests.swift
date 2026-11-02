@@ -352,13 +352,38 @@ struct LibraryPageTests {
         #expect(after.filter(\.hovering).count <= 1)
     }
 
+    /// A heading's + and ⋯ light up under the pointer (one at a time), like the tab bar's buttons.
+    @Test func headingButtonsLightUpUnderThePointer() throws {
+        let p = try page()
+        defer { p.close() }
+        p.window.contentView?.layoutSubtreeIfNeeded()
+        let ai = try #require(p.section("AI"))
+        let cell = try #require(p.ov.view(atColumn: 0, row: p.ov.row(forItem: ai), makeIfNecessary: true) as? SectionCell)
+        cell.layoutSubtreeIfNeeded()
+        let tracker = p.outline.outline
+        func on(_ b: NSView) -> NSPoint { p.ov.convert(NSPoint(x: b.bounds.midX, y: b.bounds.midY), from: b) }
+        tracker.hover(at: on(cell.plus))
+        #expect(cell.plus.hovered && !cell.more.hovered)
+        tracker.hover(at: on(cell.more))
+        #expect(!cell.plus.hovered && cell.more.hovered)
+        tracker.hover(at: on(cell.nameField))                                 // the heading, not a button
+        #expect(!cell.plus.hovered && !cell.more.hovered)
+        tracker.hover(at: on(cell.more))
+        let r = p.ov.rect(ofRow: p.ov.row(forItem: try #require(p.row("1-intro"))))
+        tracker.hover(at: NSPoint(x: r.midX, y: r.midY))                      // another row
+        #expect(!cell.plus.hovered && !cell.more.hovered)
+        tracker.hover(at: on(cell.plus))
+        tracker.hover(at: NSPoint(x: -50, y: -50))                            // off the list
+        #expect(!cell.plus.hovered && !cell.more.hovered)
+    }
+
     /// Pictures of the page (set COLEARNER_TEST_SNAPSHOTS=<folder>): the real course folders as the first launch lists
     /// them, and a small library with a "before mid" subfolder open, a hidden file and an empty section.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["COLEARNER_TEST_SNAPSHOTS"] != nil))
     func snapshots() throws {
         let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["COLEARNER_TEST_SNAPSHOTS"]!)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        func render(_ outline: LibraryOutline, _ name: String, dark: Bool, height: CGFloat) throws {
+        func render(_ outline: LibraryOutline, _ name: String, dark: Bool, height: CGFloat, pointer: () -> Void = {}) throws {
             let w = NSWindow(contentRect: NSRect(x: -12000, y: -12000, width: 760, height: height), styleMask: .borderless,
                              backing: .buffered, defer: false)
             w.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -370,6 +395,8 @@ struct LibraryPageTests {
             w.contentView = box
             box.layoutSubtreeIfNeeded()
             outline.outline.sizeLastColumnToFit()
+            box.layoutSubtreeIfNeeded()
+            pointer()
             box.layoutSubtreeIfNeeded()
             let rep = try #require(box.bitmapImageRepForCachingDisplay(in: box.bounds))
             box.cacheDisplay(in: box.bounds, to: rep)
@@ -402,7 +429,14 @@ struct LibraryPageTests {
         let hide = try #require(p.outline.menuItems(for: b7).last)
         _ = hide.target?.perform(hide.action)
         p.outline.activate(try #require(p.row("Hidden (1)")))
-        try render(p.outline, "small-light", dark: false, height: 560)
-        try render(p.outline, "small-dark", dark: true, height: 560)
+        // The pointer on AI's + (its heading row lit, the button lit darker).
+        let onPlus = {
+            guard let ai = p.section("AI"),
+                  let cell = p.ov.view(atColumn: 0, row: p.ov.row(forItem: ai), makeIfNecessary: true) as? SectionCell else { return }
+            cell.layoutSubtreeIfNeeded()
+            p.outline.outline.hover(at: p.ov.convert(NSPoint(x: cell.plus.bounds.midX, y: cell.plus.bounds.midY), from: cell.plus))
+        }
+        try render(p.outline, "small-light", dark: false, height: 560, pointer: onPlus)
+        try render(p.outline, "small-dark", dark: true, height: 560, pointer: onPlus)
     }
 }

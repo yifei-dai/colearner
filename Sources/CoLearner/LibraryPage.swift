@@ -629,7 +629,7 @@ final class LibraryOutlineView: NSOutlineView {
 
     /// Lights the row at `point` (in the outline's coordinates), and only that one.
     func hover(at point: NSPoint) {
-        setHovered(visibleRect.contains(point) ? row(at: point) : -1)
+        setHovered(visibleRect.contains(point) ? row(at: point) : -1, point: point)
     }
 
     /// The rows moved under a pointer that stayed put (scrolling, a folder opened or closed, the page redrawn):
@@ -639,11 +639,15 @@ final class LibraryOutlineView: NSOutlineView {
         hover(at: convert(w.mouseLocationOutsideOfEventStream, from: nil))
     }
 
-    private func setHovered(_ r: Int) {
+    private func setHovered(_ r: Int, point: NSPoint? = nil) {
         let old = hoveredRow
         hoveredRow = r
         for i in Set([old, r]) where i >= 0 && i < numberOfRows {
             (rowView(atRow: i, makeIfNecessary: false) as? LibraryRowView)?.hovering = i == r
+            // A heading's + and ⋯ light up when the pointer is on them.
+            if let cell = view(atColumn: 0, row: i, makeIfNecessary: false) as? SectionCell {
+                cell.hoverButtons(at: i == r ? point.map { cell.convert($0, from: self) } : nil)
+            }
         }
     }
 
@@ -709,8 +713,8 @@ final class SectionCell: NSTableCellView, EditableCell {
     static let id = NSUserInterfaceItemIdentifier("section")
     let nameField = NSTextField(labelWithString: "")
     private let count = NSTextField(labelWithString: "")
-    private let plus = NSButton()
-    private let more = NSButton()
+    let plus = HoverIconButton()
+    let more = HoverIconButton()
     var onPlus: (NSView) -> Void = { _ in }
     var onMore: (NSView) -> Void = { _ in }
 
@@ -725,12 +729,8 @@ final class SectionCell: NSTableCellView, EditableCell {
         count.textColor = .tertiaryLabelColor
         for (b, symbol, tip) in [(plus, "plus", "Link a folder or PDFs to this section"), (more, "ellipsis", "Rename or remove this section")] {
             b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
-            b.isBordered = false
-            b.bezelStyle = .accessoryBarAction
-            b.contentTintColor = .secondaryLabelColor
             b.toolTip = tip
             b.target = self
-            b.setContentHuggingPriority(.required, for: .horizontal)
         }
         plus.action = #selector(plusClicked)
         more.action = #selector(moreClicked)
@@ -740,11 +740,12 @@ final class SectionCell: NSTableCellView, EditableCell {
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
+        stack.setCustomSpacing(4, after: plus)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
             stack.heightAnchor.constraint(equalToConstant: 24),
         ])
@@ -758,10 +759,56 @@ final class SectionCell: NSTableCellView, EditableCell {
         nameField.toolTip = name
         count.stringValue = text
         count.isHidden = text.isEmpty
+        hoverButtons(at: nil)   // a reused cell keeps nothing lit from the row it showed before
+    }
+
+    /// Lights + or ⋯ when `point` (in this cell's coordinates) is over it; nil: neither.
+    func hoverButtons(at point: NSPoint?) {
+        for b in [plus, more] { b.hovered = point.map { b.frame(in: self).contains($0) } ?? false }
     }
 
     @objc private func plusClicked() { onPlus(plus) }
     @objc private func moreClicked() { onMore(more) }
+}
+
+/// A small icon button with the tab bar's hover look: a soft rounded highlight while the pointer is over it (set by
+/// the outline, which tracks the pointer for the whole list) and a darker one while pressed.
+final class HoverIconButton: NSButton {
+    var hovered = false {
+        didSet {
+            guard hovered != oldValue else { return }
+            contentTintColor = hovered ? .labelColor : .secondaryLabelColor
+            needsDisplay = true
+        }
+    }
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
+        isBordered = false
+        bezelStyle = .accessoryBarAction
+        imagePosition = .imageOnly
+        imageScaling = .scaleNone
+        contentTintColor = .secondaryLabelColor
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: 22), heightAnchor.constraint(equalToConstant: 22)])
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let fill = isHighlighted ? 0.2 : hovered ? 0.11 : 0
+        if fill > 0 {
+            NSColor.labelColor.withAlphaComponent(fill).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
+        }
+        super.draw(dirtyRect)
+    }
+}
+
+private extension NSView {
+    /// This view's frame in `ancestor`'s coordinates.
+    func frame(in ancestor: NSView) -> NSRect { superview.map { ancestor.convert(frame, from: $0) } ?? frame }
 }
 
 /// A linked folder or PDF, something inside a linked folder, a hidden file, or the hint in an empty section.
