@@ -593,6 +593,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
             searchOpen = body["open"] as? Bool ?? false
         case "turn":
             if let d = body["delta"] as? Int { model.go(d) }
+        case "headHeight":
+            if let h = body["height"] as? Double, h >= 20, h <= 200, abs(CGFloat(h) - model.chatHeadHeight) >= 0.5 {
+                model.chatHeadHeight = CGFloat(h)
+            }
         case "setModel":
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let m = body["model"] as? String,
                   ModelCatalog.model(p, m) != nil else { return }

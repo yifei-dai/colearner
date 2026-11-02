@@ -204,6 +204,9 @@ final class AppModel: ObservableObject {
     private var webTabs: [String: WebBookController] = [:]
     /// The page title of each open web tab, for the tab bar and the window title.
     @Published private(set) var webTitles: [String: String] = [:]
+    /// The chat header's height (points, its bottom line included), as the chat page reports it: a web tab's bar takes
+    /// it, so the lines under both meet.
+    @Published var chatHeadHeight: CGFloat = 44
     /// The web tab on screen (nil for a PDF and on the lecture page).
     var web: WebBookController? { deck.flatMap { $0.isWeb ? webTabs[$0.path] : nil } }
 

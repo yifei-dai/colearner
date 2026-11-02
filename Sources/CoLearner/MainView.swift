@@ -16,7 +16,8 @@ struct MainView: View {
                 DeckBar()
                 Divider()
                 if let web = model.web {
-                    WebBookPane(web: web, selecting: model.selectingArea,
+                    // The bar's line meets the chat header's (a two-row header in a narrow panel can't be met).
+                    WebBookPane(web: web, barHeight: min(max(model.chatHeadHeight - 1, 30), 48), selecting: model.selectingArea,
                                 isSelecting: { [weak model] in model?.selectingArea ?? false },
                                 onArea: { [weak model] r, layer, view in model?.finishWebAreaSelection(r, on: layer, over: view) })
                 } else if model.document != nil {
@@ -344,8 +345,8 @@ struct RightPanel: View {
                     Text(shown == .chat ? "Chat" : walkthroughTitle).font(.callout.weight(.semibold))
                 }
             }
-            .padding(.vertical, 7)
             .frame(maxWidth: .infinity)
+            .frame(height: 38)   // as tall as the tab bar next to it, so their lines meet
             .overlay(alignment: .trailing) {
                 Button { model.popOut(shown) } label: {
                     Image(systemName: "rectangle.portrait.and.arrow.right").font(.system(size: 12))

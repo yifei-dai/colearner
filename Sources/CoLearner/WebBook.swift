@@ -672,6 +672,8 @@ final class WebBookController: NSObject, ObservableObject, WKNavigationDelegate,
 /// A web tab: back, forward, reload, the address and Open in Browser above the page.
 struct WebBookPane: View {
     @ObservedObject var web: WebBookController
+    /// The bar's height (the chat header's, so their lines meet).
+    var barHeight: CGFloat = 43
     /// An area of the page is being selected (passed in so the layer's crosshair and hint follow it).
     let selecting: Bool
     /// Asked by the layer as the mouse moves (AppModel.selectingArea).
@@ -681,7 +683,9 @@ struct WebBookPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            WebBookBar(web: web)
+            WebBookBar(web: web, height: barHeight)
+            Divider()
+            // Under the line, so a failed page doesn't move it.
             if let f = web.failure {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
@@ -691,8 +695,8 @@ struct WebBookPane: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
+                Divider()
             }
-            Divider()
             WebContentHost(web: web, selecting: selecting, isSelecting: isSelecting, onArea: onArea)
                 .id(web.deckID)
         }
@@ -701,6 +705,7 @@ struct WebBookPane: View {
 
 private struct WebBookBar: View {
     @ObservedObject var web: WebBookController
+    let height: CGFloat
 
     var body: some View {
         HStack(spacing: 4) {
@@ -731,7 +736,7 @@ private struct WebBookBar: View {
                 .help("Open this page in your browser")
         }
         .padding(.horizontal, 8)
-        .frame(height: 34)
+        .frame(height: height)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }

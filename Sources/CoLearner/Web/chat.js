@@ -324,6 +324,12 @@
     requestAnimationFrame(() => { fitQueued = false; fitLog(); });
   });
   for (const s of ["#head", "#others", "#quick", "#areabox", "#inputwrap", "#bar", "#note", "#status"]) rowsObserver.observe($(s));
+  // The header's height (its bottom line included), so the bar above a web page next to the chat ends on the same line.
+  let headHeight = 0;
+  new ResizeObserver(() => {
+    const h = Math.round($("#head").getBoundingClientRect().height * 2) / 2;
+    if (h > 0 && h !== headHeight) { headHeight = h; post({ type: "headHeight", height: h }); }
+  }).observe($("#head"));
   window.addEventListener("resize", fitLog);
   /// Pictures the app is still decoding (dropped, pasted or chosen a moment ago).
   function preparing() { return Number.isInteger(state.processing) && state.processing > 0 ? state.processing : 0; }
