@@ -324,6 +324,34 @@ struct LibraryPageTests {
         #expect(p.titles.filter { $0 == "1-intro" }.count == 2)
     }
 
+    /// The highlight follows the pointer, one row at a time: rows that pass under a still pointer while scrolling
+    /// don't stay lit.
+    @Test func onlyTheRowUnderThePointerIsLit() throws {
+        let p = try page()
+        defer { p.close() }
+        p.window.contentView?.layoutSubtreeIfNeeded()
+        let views = (0..<p.ov.numberOfRows).compactMap { p.ov.rowView(atRow: $0, makeIfNecessary: true) as? LibraryRowView }
+        func lit() -> [String] {
+            views.indices.filter { views[$0].hovering }.compactMap { (p.ov.item(atRow: $0) as? LibraryRow)?.title }
+        }
+        func pointer(on title: String) throws -> NSPoint {
+            let r = p.ov.rect(ofRow: p.ov.row(forItem: try #require(p.row(title))))
+            return NSPoint(x: r.midX, y: r.midY)
+        }
+        // The pointer stays put while rows scroll under it: each step lights the row now there, and only that one.
+        for title in ["7a", "7b", "AI", "1-intro", "2-agents", "rec6"] {
+            p.outline.outline.hover(at: try pointer(on: title))
+            #expect(lit() == [title])
+        }
+        // Leaving the list, or the page being drawn again with the pointer elsewhere, lights nothing.
+        p.outline.outline.hover(at: NSPoint(x: -50, y: -50))
+        #expect(lit().isEmpty)
+        p.outline.outline.hover(at: try pointer(on: "7a"))
+        p.app.show()
+        let after = (0..<p.ov.numberOfRows).compactMap { p.ov.rowView(atRow: $0, makeIfNecessary: false) as? LibraryRowView }
+        #expect(after.filter(\.hovering).count <= 1)
+    }
+
     /// Pictures of the page (set COLEARNER_TEST_SNAPSHOTS=<folder>): the real course folders as the first launch lists
     /// them, and a small library with a "before mid" subfolder open, a hidden file and an empty section.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["COLEARNER_TEST_SNAPSHOTS"] != nil))

@@ -100,10 +100,16 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(poppedOut.map(\.rawValue), forKey: "poppedOut")
     }
 
-    /// Bring a panel into view: its pop-out window, or its tab next to the slides.
+    /// Bring a panel into view: its pop-out window, or its tab next to the slides (also next to the lecture page,
+    /// which otherwise shows without them).
     func showPanel(_ tab: RightTab) {
         if poppedOut.contains(tab) { popOuts.show(tab) } else { rightTab = tab }
+        if deck == nil { panelOnLecturePage = true }
     }
+
+    /// Chat or Walkthrough was asked for while the lecture page was showing (⌘1, ⌘2, ⇧⌘F): shown next to it until
+    /// a lecture opens or a New Tab shows the page again.
+    @Published private(set) var panelOnLecturePage = false
     @Published private(set) var deck: Deck?
     @Published private(set) var document: PDFDocument?
     private var documentRevision: FileRevision?
@@ -375,6 +381,7 @@ final class AppModel: ObservableObject {
     /// Bring the New Tab to the front (the open decks keep their tabs).
     func showNewTab() {
         guard newTab else { return }
+        panelOnLecturePage = false
         if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
         selectingArea = false
         selectingWalkthroughArea = false
@@ -451,6 +458,7 @@ final class AppModel: ObservableObject {
         }
         if let f = doc.frames { d.layout.frames = f }   // the frames actually used (also keys the slide-image cache)
         if deck == nil { newTab = false }   // picked in the New Tab (or nothing was open)
+        panelOnLecturePage = false
         selectingArea = false
         selectingWalkthroughArea = false
         if !openDecks.contains(where: { $0.path == d.path }) { openDecks.append(d) }

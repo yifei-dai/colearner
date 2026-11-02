@@ -119,7 +119,13 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        // Scrolling moves rows under a pointer that stays put: the highlight goes with the pointer, not the rows.
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(rowsMoved), name: NSView.boundsDidChangeNotification,
+                                               object: scroll.contentView)
     }
+
+    @objc private func rowsMoved() { outline.hoverUnderPointer() }
 
     // MARK: showing the sections
 
@@ -175,6 +181,7 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         outline.reloadData()
         restoring = false
         restoreExpansion()
+        outline.hoverUnderPointer()
         if let id = renameWhenShown, file.section(id) != nil, outline.window != nil { beginRename(section: id) }
     }
 
@@ -247,6 +254,14 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         return v
     }
 
+    func outlineView(_ ov: NSOutlineView, didAdd rowView: NSTableRowView, forRow row: Int) {
+        (rowView as? LibraryRowView)?.hovering = row == outline.hoveredRow
+    }
+
+    func outlineView(_ ov: NSOutlineView, didRemove rowView: NSTableRowView, forRow row: Int) {
+        (rowView as? LibraryRowView)?.hovering = false
+    }
+
     func outlineView(_ ov: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let r = item as? LibraryRow else { return nil }
         if r.kind == .section {
@@ -279,8 +294,12 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         restoring = true
         r.children.forEach(applySaved)
         restoring = false
+        outline.hoverUnderPointer()
     }
-    func outlineViewItemDidCollapse(_ n: Notification) { remember(n, open: false) }
+    func outlineViewItemDidCollapse(_ n: Notification) {
+        remember(n, open: false)
+        if !restoring { outline.hoverUnderPointer() }
+    }
 
     /// Keeps a heading or folder opened or closed by the user that way next time.
     private func remember(_ n: Notification, open: Bool) {
@@ -583,6 +602,50 @@ final class LibraryOutlineView: NSOutlineView {
     var onWindow: () -> Void = {}
     /// The row under the last mouse press.
     var pressedItem: Any?
+    /// The one row highlighted under the pointer (-1: none).
+    private(set) var hoveredRow = -1
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for a in trackingAreas where a.owner === self && a.userInfo?["hover"] != nil { removeTrackingArea(a) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                                       owner: self, userInfo: ["hover": true]))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        hover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        if event.trackingArea?.userInfo?["hover"] != nil { hover(at: convert(event.locationInWindow, from: nil)) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        if event.trackingArea?.userInfo?["hover"] != nil { setHovered(-1) }
+    }
+
+    /// Lights the row at `point` (in the outline's coordinates), and only that one.
+    func hover(at point: NSPoint) {
+        setHovered(visibleRect.contains(point) ? row(at: point) : -1)
+    }
+
+    /// The rows moved under a pointer that stayed put (scrolling, a folder opened or closed, the page redrawn):
+    /// light the row now under it.
+    func hoverUnderPointer() {
+        guard let w = window, w.isVisible, NSApp.isActive else { setHovered(-1); return }
+        hover(at: convert(w.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
+    private func setHovered(_ r: Int) {
+        let old = hoveredRow
+        hoveredRow = r
+        for i in Set([old, r]) where i >= 0 && i < numberOfRows {
+            (rowView(atRow: i, makeIfNecessary: false) as? LibraryRowView)?.hovering = i == r
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         let i = row(at: convert(event.locationInWindow, from: nil))
@@ -592,6 +655,7 @@ final class LibraryOutlineView: NSOutlineView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        setHovered(-1)   // the pointer left while the page was away
         if window != nil { onWindow() }
     }
 
@@ -619,26 +683,12 @@ final class ClosureMenuItem: NSMenuItem {
 
 // MARK: - rows on screen
 
-/// A row's background: a soft highlight under the pointer, as on the tab bar.
+/// A row's background: a soft highlight under the pointer, as on the tab bar. The outline decides which row that is
+/// (LibraryOutlineView.hoveredRow), so scrolling under a still pointer leaves exactly one row lit.
 final class LibraryRowView: NSTableRowView {
     var hoverable = true
     var isSection = false
-    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                                       owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        hovering = false   // the pointer left while the page was away
-    }
+    var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
 
     override func drawBackground(in dirtyRect: NSRect) {
         guard hovering, hoverable else { return }

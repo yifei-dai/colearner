@@ -7,8 +7,10 @@ struct MainView: View {
 
     var body: some View {
         // Slides : right panel = 3 : 2 at every launch. With Chat and Walkthrough both popped out, the slides
-        // fill the window.
-        let showRight = model.poppedOut.count < RightTab.allCases.count
+        // fill the window. The lecture page (a New Tab) fills it too: Chat and Walkthrough come with a lecture
+        // (or when asked for there, e.g. ⇧⌘F).
+        let docked = model.poppedOut.count < RightTab.allCases.count
+        let showRight = docked && (model.deck != nil || model.panelOnLecturePage)
         SplitPanes(state: split, showRight: showRight) {
             VStack(spacing: 0) {
                 DeckBar()
@@ -26,7 +28,7 @@ struct MainView: View {
             RightPanel()
                 .frame(maxHeight: .infinity)
         }
-        .frame(minWidth: showRight ? 860 : 480, minHeight: 560)
+        .frame(minWidth: docked ? 860 : 480, minHeight: 560)
         .background(WindowReader { [weak model] w in model?.mainWindow = w })
         .onAppear { model.mainWindowAppeared() }
         .navigationTitle(model.deck.map { "\($0.title) — slide \(model.page)/\(model.pageCount)" } ?? "Co-learner")
