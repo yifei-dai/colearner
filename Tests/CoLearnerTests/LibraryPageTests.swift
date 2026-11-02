@@ -103,7 +103,7 @@ struct LibraryPageTests {
         defer { p.close() }
         #expect(p.titles == ["Robotics", "lectures", "before mid", "7a", "7b", "AI", "lectures", "1-intro", "2-agents",
                              "Other PDFs", "rec6", "Empty",
-                             "Nothing linked yet. Use + to link a folder or PDFs, or drop them here from Finder."])
+                             "Nothing linked yet. Use + to link a folder, PDFs or a web page, or drop them here from Finder."])
         // A click on a subfolder opens it (and is remembered); a click on a PDF opens the deck.
         p.outline.activate(try #require(p.row("before mid")))
         #expect(p.titles.contains("01a-intro"))
@@ -122,7 +122,7 @@ struct LibraryPageTests {
         let p = try page()
         defer { p.close() }
         func titles(_ r: LibraryRow?) -> [String] { (r.map { p.outline.menuItems(for: $0) } ?? []).map { $0.isSeparatorItem ? "-" : $0.title } }
-        #expect(titles(p.section("AI")) == ["Link Folder…", "Link PDFs…", "-", "Rename Section", "Remove Section…", "-", "New Section"])
+        #expect(titles(p.section("AI")) == ["Link Folder…", "Link PDFs…", "Link Web Page…", "-", "Rename Section", "Remove Section…", "-", "New Section"])
         #expect(titles(p.row("7a")) == ["Open", "Show in Finder", "Rename File…", "-", "Hide from Section"])
         #expect(titles(p.row("before mid")) == ["Show in Finder", "-", "Hide from Section"])
         #expect(titles(p.row("rec6")) == ["Open", "Show in Finder", "Rename File…", "-", "Remove from Section"])
@@ -137,6 +137,38 @@ struct LibraryPageTests {
         let again = try #require(p.outline.menuItems(for: hidden7b).first)
         _ = again.target?.perform(again.action)
         #expect(p.titles.contains("7b") && !p.titles.contains("Hidden (1)"))
+    }
+
+    @Test func webPagesShowAsWebLinksThatOpenInATab() throws {
+        let p = try page()
+        defer { p.close() }
+        let url = "https://textbooks.math.gatech.edu/ila/linear-transformations.html"
+        p.app.editSections { $0.link([LinkedItem(kind: .web, path: url, title: "Linear Transformations")], to: "e") }
+        let r = try #require(p.row("Linear Transformations"))
+        #expect(r.isWeb && !r.isFile && !r.isFolder && r.kind == .link)
+        let cell = try #require(p.ov.view(atColumn: 0, row: p.ov.row(forItem: r), makeIfNecessary: true) as? ItemCell)
+        #expect(cell.nameField.toolTip == url)
+        // The heading counts it apart from PDFs.
+        func titles(_ r: LibraryRow?) -> [String] { (r.map { p.outline.menuItems(for: $0) } ?? []).map { $0.isSeparatorItem ? "-" : $0.title } }
+        #expect(titles(r) == ["Open", "Open in Browser", "Rename…", "-", "Remove from Section"])
+        // A click opens it (the app opens it in its book's tab).
+        p.outline.activate(r)
+        #expect(p.app.opened == [url])
+        // Rename… names it on the page only.
+        let rename = try #require(p.outline.menuItems(for: r).first { $0.title == "Rename…" })
+        _ = rename.target?.perform(rename.action)
+        let editor = try #require(p.window.firstResponder as? NSTextView)
+        let f = try #require(editor.delegate as? NSTextField)
+        f.stringValue = "ILA 3.3"
+        p.window.makeFirstResponder(p.ov)
+        #expect(p.app.renamed.isEmpty)
+        #expect(p.app.sectionsFile.section("e")?.items.first?.title == "ILA 3.3")
+        #expect(p.row("ILA 3.3") != nil)
+        // Remove from Section unlinks it.
+        let renamed = try #require(p.row("ILA 3.3"))
+        let unlink = try #require(p.outline.menuItems(for: renamed).last)
+        _ = unlink.target?.perform(unlink.action)
+        #expect(p.app.sectionsFile.section("e")?.items.isEmpty == true)
     }
 
     @Test func dragARowToAnotherSectionMovesItAndOptionKeepsBoth() throws {
@@ -316,11 +348,11 @@ struct LibraryPageTests {
         // A folder linked meanwhile (as a reload from Finder would bring it).
         p.app.sectionsFile.link([LinkedItem(kind: .folder, path: p.root.appendingPathComponent("A/lectures").path)], to: "e")
         p.app.show()
-        #expect(p.titles.contains("Nothing linked yet. Use + to link a folder or PDFs, or drop them here from Finder."))
+        #expect(p.titles.contains("Nothing linked yet. Use + to link a folder, PDFs or a web page, or drop them here from Finder."))
         field.stringValue = "Exam 2"
         p.window.makeFirstResponder(p.ov)
         #expect(p.section("Exam 2") != nil)
-        #expect(!p.titles.contains("Nothing linked yet. Use + to link a folder or PDFs, or drop them here from Finder."))
+        #expect(!p.titles.contains("Nothing linked yet. Use + to link a folder, PDFs or a web page, or drop them here from Finder."))
         #expect(p.titles.filter { $0 == "1-intro" }.count == 2)
     }
 

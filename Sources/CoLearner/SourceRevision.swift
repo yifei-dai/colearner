@@ -39,7 +39,8 @@ enum SourceRevision {
     /// library.json gives (as before decks showed their file names), so that change alone keeps sessions.
     static func context(for deck: Deck, course: String? = nil) -> String {
         let paths = Set([deck.path] + deck.contextFiles + deck.walkthroughs.map(\.path)).sorted()
-        let context = Context(path: deck.path, title: deck.knownTitle ?? deck.title, course: course ?? deck.courseName,
+        // A web book's name comes later, from one of its pages: that alone is no new source (its pages go one by one).
+        let context = Context(path: deck.path, title: deck.isWeb ? "" : deck.knownTitle ?? deck.title, course: course ?? deck.courseName,
                               layout: deck.layout,
                               pages: deck.walkthroughs.sorted { $0.path < $1.path },
                               files: paths.map { File(path: $0, revision: FileRevision.read($0)) })

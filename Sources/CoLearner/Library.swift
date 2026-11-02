@@ -42,6 +42,8 @@ struct Deck: Hashable, Identifiable {
     /// walkthrough pages name decks by that file name.
     var knownPath: String? = nil
     var id: String { path }
+    /// A web book read in a web tab (its path is the book's address, WebAddress.bookID), not a PDF.
+    var isWeb: Bool { WebAddress.isWeb(path) }
     /// The file name study pages know this deck by (its first one).
     var knownFile: String { URL(fileURLWithPath: knownPath ?? path).lastPathComponent }
 

@@ -111,7 +111,7 @@ final class AppModel: ObservableObject {
     /// a lecture opens or a New Tab shows the page again.
     @Published private(set) var panelOnLecturePage = false
     @Published private(set) var deck: Deck?
-    @Published private(set) var document: PDFDocument?
+    @Published private(set) var document: PDFDocument? { didSet { updateThumbnailsHidden() } }
     private var documentRevision: FileRevision?
     private var documentThumbnailKey = ""
     @Published var page: Int = 1 {
@@ -161,8 +161,10 @@ final class AppModel: ObservableObject {
             applyAppearance()
         }
     }
-    /// True while the user is dragging out an area of the slide to ask about.
-    @Published var selectingArea = false
+    /// True while the user is dragging out an area of the slide (or of the web page in a web tab) to ask about.
+    @Published var selectingArea = false {
+        didSet { if selectingArea != oldValue { web?.showCrosshair(selectingArea) } }
+    }
     /// The same for an area of the walkthrough page or notes (one selection at a time).
     @Published var selectingWalkthroughArea = false {
         didSet { if selectingWalkthroughArea != oldValue { walk.showCrosshair(selectingWalkthroughArea) } }
@@ -197,9 +199,20 @@ final class AppModel: ObservableObject {
     /// Reads the linked folders again when something in them changes.
     private lazy var watcher = LibraryWatcher { [weak self] in self?.reloadLibrary(quiet: true) }
     let thumbs = ThumbStore()
+    /// Web books read in web tabs (webbooks.json), and the tab of each open one.
+    let webBooks = WebBooks()
+    private var webTabs: [String: WebBookController] = [:]
+    /// The page title of each open web tab, for the tab bar and the window title.
+    @Published private(set) var webTitles: [String: String] = [:]
+    /// The web tab on screen (nil for a PDF and on the lecture page).
+    var web: WebBookController? { deck.flatMap { $0.isWeb ? webTabs[$0.path] : nil } }
 
     var deckID: String { deck?.path ?? "" }
-    var pageCount: Int { document?.pageCount ?? 0 }
+    /// Slides in the deck; in a web tab, the pages read in its book so far (questions are numbered by page).
+    var pageCount: Int {
+        if let d = deck, d.isWeb { return webBooks.pageCount(d.path) }
+        return document?.pageCount ?? 0
+    }
 
     init() {
         applyAppearance()
@@ -304,8 +317,10 @@ final class AppModel: ObservableObject {
     }
 
     /// The deck for a PDF: as the sections list it, or (a tab or chat whose PDF no section lists) made the same way.
+    /// For a web address: its web book.
     func deck(path: String) -> Deck? {
-        library.decks[path] ?? Library.looseDeck(path: path, file: libraryFile, aliases: tracker.aliases)
+        if WebAddress.isWeb(path) { return webBooks.deck(path) }
+        return library.decks[path] ?? Library.looseDeck(path: path, file: libraryFile, aliases: tracker.aliases)
     }
 
     /// Everything kept by a PDF's path follows it to its new place (a rename or move in Finder or in the app, or a
@@ -382,7 +397,7 @@ final class AppModel: ObservableObject {
     func showNewTab() {
         guard newTab else { return }
         panelOnLecturePage = false
-        if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
+        if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)"); saveWebState(cur) }
         selectingArea = false
         selectingWalkthroughArea = false
         deck = nil
@@ -441,13 +456,14 @@ final class AppModel: ObservableObject {
     /// Open a lecture from the Lectures menu or the lecture list. From a New Tab, it takes that tab's place.
     @discardableResult
     func open(_ d: Deck) -> Bool {
+        if d.isWeb { return openWebDeck(d, start: nil) }
         var d = d
         if deck?.path == d.path {
             guard refreshDocumentIfNeeded() else { return false }
             if let deck { chat.sourcesDidChange(for: deck) }
             return true
         }
-        if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)") }
+        if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)"); saveWebState(cur) }
         let revision = FileRevision.read(d.path)
         guard let doc = Self.makeDocument(for: d) else {
             let a = NSAlert()
@@ -481,6 +497,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     func refreshDocumentIfNeeded() -> Bool {
         guard var d = deck else { return false }
+        if d.isWeb { return true }   // a web tab reads its page when asked (WebBookController.snapshot)
         let revision = FileRevision.read(d.path)
         guard revision != documentRevision else { return document != nil }
         guard let made = Self.makeDocument(for: d) else {
@@ -509,6 +526,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(d.path == deck?.path ? page : UserDefaults.standard.integer(forKey: "lastPage.\(d.path)"),
                                   forKey: "lastPage.\(d.path)")
         openDecks.remove(at: i)
+        defer { if d.isWeb { closeWebTab(d.path) } }
         if deck?.path == d.path {
             selectingArea = false
             selectingWalkthroughArea = false
@@ -516,6 +534,239 @@ final class AppModel: ObservableObject {
             return
         }
         saveSession()
+    }
+
+    // MARK: web tabs
+
+    /// Open a Web Page… (the Lectures menu, the lecture page, File ›): the page opens in its book's tab. A book no
+    /// section links yet goes into "Web Pages" (made again if it was removed), as PDFs opened by hand go into Other PDFs.
+    func openWebPagePanel() {
+        selectingArea = false
+        selectingWalkthroughArea = false
+        guard let u = WebAddressPrompt.ask(
+            title: "Open a web page",
+            info: "Type or paste the address of a web page or online book. It opens in a tab with the chat next to it; "
+                + "pages you open from it stay in that tab.",
+            button: "Open") else { return }
+        let book = webBooks.bookID(for: u)
+        let listed = sectionsFile.sections.contains { s in
+            s.items.contains { $0.kind == .web && URL(string: $0.path).map { webBooks.bookID(for: $0) } == book }
+        }
+        if !listed {
+            editSections { f in
+                if f.section("web") == nil { f.addSection(named: "Web Pages", id: "web") }
+                f.link([LinkedItem(kind: .web, path: WebAddress.pageKey(u), title: webBooks.title(of: u))], to: "web")
+            }
+        }
+        openWeb(u)
+    }
+
+    /// Opens a web page in its book's tab (made the first time), at that page.
+    func openWeb(_ u: URL) {
+        guard let d = webBooks.deck(u.absoluteString) else { return }
+        linkRequests[d.path] = WebAddress.pageKey(u)
+        openWebDeck(d, start: u)
+    }
+
+    /// Web tabs: the address last opened from a link or Open a Web Page… (it may redirect elsewhere), so the link still
+    /// gets the title of the page it leads to.
+    private var linkRequests: [String: String] = [:]
+    /// Title-only changes refresh the chat at most twice a second (some pages change their title all the time).
+    private var webTitleRefresh: DispatchWorkItem?
+    /// When each tab's page came up: its title is kept for the chat during its first seconds only (a "Loading…" title
+    /// settles; a title that keeps changing later, like a counter, only changes the tab).
+    private var webPageSince: [String: Date] = [:]
+
+    /// Shows a web book's tab: made the first time (back where it was last time, or at `start`), at `start` if given.
+    @discardableResult
+    private func openWebDeck(_ d: Deck, start: URL?) -> Bool {
+        let tab = webTab(for: d, start: start)
+        if deck?.path == d.path { return true }
+        if let cur = deck { UserDefaults.standard.set(page, forKey: "lastPage.\(cur.path)"); saveWebState(cur) }
+        if deck == nil { newTab = false }   // picked in the New Tab (or nothing was open)
+        panelOnLecturePage = false
+        selectingArea = false
+        selectingWalkthroughArea = false
+        if !openDecks.contains(where: { $0.path == d.path }) { openDecks.append(d) }
+        deck = d
+        document = nil
+        documentRevision = nil
+        documentThumbnailKey = ""
+        slideTexts = []
+        lastNotifiedPage = 0
+        let shown = tab.url ?? start ?? webBooks.record(d.path).flatMap { URL(string: $0.lastURL) }
+        page = shown.map { webBooks.number(d.path, url: $0, title: tab.url == $0 ? tab.title : "") } ?? 1
+        if webTitles[d.path] == nil { webTitles[d.path] = webBooks.page(d.path, page)?.title.nonEmpty ?? d.title }
+        saveSession()
+        chatPages = Set(chat.store.pagesWithChats(d.path))
+        chat.sourcesDidChange(for: d)
+        chat.showCurrent()
+        return true
+    }
+
+    /// The tab of an open web book, made (and loaded) the first time.
+    private func webTab(for d: Deck, start: URL?) -> WebBookController {
+        if let t = webTabs[d.path] {
+            if let start, t.url.map(WebAddress.pageKey) != WebAddress.pageKey(start) { t.load(start) }
+            return t
+        }
+        let t = WebBookController(deckID: d.path)
+        t.onChange = { [weak self] t, another in self?.webPageChanged(t, another: another) }
+        t.onLoad = { [weak self] t in self?.webPageLoaded(t) }
+        // ⌘V on the page with a picture on the clipboard: the picture goes to the chat (text pastes into the page).
+        t.webView.pastePictures = { [weak self] in
+            guard let self, self.chat.pasteImages() else { return false }
+            self.showChatForQuestion()
+            return true
+        }
+        if let z = webBooks.record(d.path)?.zoom { t.setZoom(z) }
+        webTabs[d.path] = t
+        if let start {
+            t.load(start)
+        } else {
+            let last = webBooks.record(d.path).flatMap { URL(string: $0.lastURL) } ?? URL(string: d.path)
+            if let last { t.restore(webBooks.savedState(d.path), fallback: last) }
+        }
+        return t
+    }
+
+    /// The tab shows `another` page (its title still to come: the one reported meanwhile is the last page's), or a new
+    /// title for it: its number in the book, for the chat.
+    private func webPageChanged(_ t: WebBookController, another: Bool) {
+        guard let u = t.url, WebAddress.isWeb(u.absoluteString) else { return }
+        let key = WebAddress.pageKey(u)
+        if another { webPageSince[t.deckID] = Date() }
+        let settling = Date().timeIntervalSince(webPageSince[t.deckID] ?? .distantPast) < 10
+        let title = another || !settling ? "" : t.title
+        let n = webBooks.number(t.deckID, url: u, title: title)
+        webBooks.setLast(t.deckID, u)
+        let label = (another ? nil : t.title.nonEmpty) ?? webBooks.page(t.deckID, n)?.title.nonEmpty ?? WebAddress.label(key)
+        if webTitles[t.deckID] != label { webTitles[t.deckID] = label }
+        // A web link on the lecture page shows the page's title once it is known (also a link that redirected here).
+        if !title.isEmpty {
+            let asked = linkRequests.removeValue(forKey: t.deckID)
+            let keys = Set([key, asked].compactMap { $0 })
+            if sectionsFile.sections.contains(where: { $0.items.contains { $0.kind == .web && keys.contains($0.path) && $0.title == nil } }) {
+                editSections { f in keys.forEach { f.name(webLink: $0, title) } }
+            }
+        }
+        guard deck?.path == t.deckID else { return }
+        if page != n {
+            webTitleRefresh?.cancel()
+            webTitleRefresh = nil
+            page = n
+            return
+        }
+        guard webTitleRefresh == nil else { return }
+        let w = DispatchWorkItem { [weak self] in
+            self?.webTitleRefresh = nil
+            self?.chat.showCurrent()
+        }
+        webTitleRefresh = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+    }
+
+    /// A page finished loading: the tab's place is saved, and the book gets its name from the first page that shows it.
+    private func webPageLoaded(_ t: WebBookController) {
+        webBooks.saveState(t.deckID, t.savedState)
+        guard webBooks.record(t.deckID)?.title == nil, let u = t.url, WebAddress.pageKey(u).hasPrefix(t.deckID) else { return }
+        t.siteName(root: t.deckID) { [weak self] name in
+            guard let self, let name, self.webBooks.nameIfUnnamed(t.deckID, name), let d = self.webBooks.deck(t.deckID) else { return }
+            self.openDecks = self.openDecks.map { $0.path == d.path ? d : $0 }
+            if self.deck?.path == d.path { self.deck = d; self.chat.showCurrent() }
+        }
+    }
+
+    private func saveWebState(_ d: Deck) {
+        guard d.isWeb, let t = webTabs[d.path] else { return }
+        webBooks.saveState(d.path, t.savedState)
+    }
+
+    /// Before quitting: each web tab's history and place.
+    func saveWebTabs() {
+        for (id, t) in webTabs { webBooks.saveState(id, t.savedState) }
+        webBooks.saveNow()
+    }
+
+    private func closeWebTab(_ id: String) {
+        guard deck?.path != id, let t = webTabs.removeValue(forKey: id) else { return }
+        webBooks.saveState(id, t.savedState)
+        t.onChange = nil
+        t.onLoad = nil
+        t.webView.stopLoading()
+        webTitles[id] = nil
+    }
+
+    /// A web tab's title in the tab bar: its page's title (a tab restored at launch: the page it was on).
+    func webTabTitle(_ d: Deck) -> String {
+        if let t = webTitles[d.path] { return t }
+        guard let last = webBooks.record(d.path)?.lastURL, let u = URL(string: last) else { return d.title }
+        return webBooks.title(of: u) ?? d.title
+    }
+
+    /// The title of the page on screen in a web tab.
+    var webPageTitle: String? {
+        guard let d = deck, d.isWeb else { return nil }
+        return webBooks.page(d.path, page)?.title.nonEmpty ?? webTitles[d.path]
+    }
+
+    /// Back / Forward in a web tab, the next / previous slide otherwise (⌘[ ⌘]).
+    func turn(_ delta: Int) {
+        if let w = web { delta < 0 ? w.goBack() : w.goForward(); return }
+        go(delta)
+    }
+
+    /// The page or slide a chat link, search result or Ask again names: a web tab goes back to that page.
+    func goToPage(_ n: Int) {
+        guard n >= 1, n <= max(pageCount, 1) else { return }
+        if let d = deck, d.isWeb {
+            guard n != page, let ref = webBooks.page(d.path, n), let u = URL(string: ref.url) else { return }
+            web?.load(u)   // its number follows once it's there (webPageChanged)
+            return
+        }
+        page = n
+    }
+
+    /// Text size in a web tab (⌘+ ⌘- ⌘0), kept per book.
+    func zoomWeb(_ step: Int) {
+        guard let w = web, let d = deck else { return }
+        let z = step == 0 ? 1 : (step > 0 ? w.zoom * 1.1 : w.zoom / 1.1)
+        w.setZoom(z)
+        webBooks.setZoom(d.path, w.zoom)
+    }
+
+    /// Link Web Page… in a section's + menu: the address, linked to that section (nothing opens).
+    func linkWebPage(to section: String) {
+        let name = sectionsFile.section(section)?.name ?? "this section"
+        guard let u = WebAddressPrompt.ask(
+            title: "Link a web page to “\(name)”",
+            info: "Type or paste the address of a web page or online book. Click it on the lecture page to open it in a tab.",
+            button: "Link") else { return }
+        editSections { $0.link([LinkedItem(kind: .web, path: WebAddress.pageKey(u), title: webBooks.title(of: u))], to: section) }
+    }
+
+    // MARK: the thumbnail strip
+
+    /// The thumbnail strip under the slides is hidden. Remembered apart for portrait pages (book chapters, A4 handouts)
+    /// and landscape slides, so hiding it for a book chapter keeps it for lecture slides.
+    @Published private(set) var thumbnailsHidden = false
+
+    private var pageShape: String {
+        guard let p = document?.page(at: 0) else { return "landscape" }
+        let b = p.bounds(for: .cropBox)
+        let turned = p.rotation % 180 != 0
+        return (turned ? b.width > b.height : b.height > b.width) ? "portrait" : "landscape"
+    }
+
+    func toggleThumbnails() {
+        guard document != nil else { return }
+        thumbnailsHidden.toggle()
+        UserDefaults.standard.set(thumbnailsHidden, forKey: "thumbnailsHidden.\(pageShape)")
+    }
+
+    private func updateThumbnailsHidden() {
+        let hidden = document != nil && UserDefaults.standard.bool(forKey: "thumbnailsHidden.\(pageShape)")
+        if hidden != thumbnailsHidden { thumbnailsHidden = hidden }
     }
 
     /// One PDF page per slide, plus each slide's text. 2-up handouts are split into two cropped pages; their
@@ -594,7 +845,7 @@ final class AppModel: ObservableObject {
     /// Link a walkthrough / review page or a notes PDF to the open deck. It syncs to the slides like the
     /// built-in links: HTML pages through their slide references, notes PDFs through their slide stamps.
     func linkStudyPagePanel() {
-        guard let d = deck else { return }
+        guard let d = deck, !d.isWeb else { return }
         selectingWalkthroughArea = false
         let p = NSOpenPanel()
         p.allowedContentTypes = [.html, .pdf]
@@ -680,7 +931,7 @@ final class AppModel: ObservableObject {
     // MARK: selecting an area of the slide
 
     func beginAreaSelection() {
-        guard document != nil else { return }
+        guard document != nil || web != nil else { return }
         selectingWalkthroughArea = false   // one selection at a time
         if !poppedOut.contains(.chat) { rightTab = .chat }   // a popped-out chat stays where it is
         selectingArea = true
@@ -699,6 +950,24 @@ final class AppModel: ObservableObject {
         if index + 1 != page { page = index + 1 }
         if !poppedOut.contains(.chat) { rightTab = .chat }
         chat.setArea(page: index + 1, url: cut.url, thumb: cut.thumb)
+    }
+
+    /// The box dragged out over a web page (`r` in the layer's coordinates): a picture of that part, as the area of
+    /// this page for the next question.
+    func finishWebAreaSelection(_ r: NSRect, on overlay: AreaSelectView, over view: NSView) {
+        selectingArea = false
+        guard let tab = web, view === tab.webView, let d = deck else { return }
+        let n = page
+        tab.capture(overlay.convert(r, to: tab.webView)) { [weak self] image, section in
+            guard let self, self.deck?.path == d.path, self.page == n else { return }
+            let areas = AppPaths.cache.appendingPathComponent("areas", isDirectory: true)
+            guard let image, let cut = ImageAttachments.make(image: image, label: "", detail: "", in: areas) else {
+                NSSound.beep()
+                return
+            }
+            if !self.poppedOut.contains(.chat) { self.rightTab = .chat }
+            self.chat.setArea(page: n, url: cut.url, thumb: cut.thumb, section: section)
+        }
     }
 
     // MARK: asking about the walkthrough
@@ -788,7 +1057,9 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The next or previous slide. Not in a web tab, where ← → belong to the page (Back and Forward are `turn`).
     func go(_ delta: Int) {
+        guard deck?.isWeb != true else { return }
         let t = min(max(page + delta, 1), max(pageCount, 1))
         if t != page { page = t }
     }
@@ -861,6 +1132,7 @@ private extension NSView {
 
 extension AppModel: LibraryActions {
     func openDeck(at path: String) {
+        if WebAddress.isWeb(path), let u = URL(string: path) { openWeb(u); return }
         if let d = deck(path: path) { open(d) }
     }
 

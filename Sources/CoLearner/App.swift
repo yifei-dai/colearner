@@ -10,7 +10,12 @@ struct CoLearnerApp: App {
         Window("Co-learner", id: "main") {
             MainView()
                 .environmentObject(model)
-                .onAppear { delegate.model = model }
+                .onAppear {
+                    delegate.model = model
+                    #if DEBUG
+                    DebugScript.start(model)
+                    #endif
+                }
         }
         .defaultSize(width: 1440, height: 860)
         .commands {
@@ -22,6 +27,7 @@ struct CoLearnerApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") { model.openNewTab() }.keyboardShortcut("t")
                 Button("Open PDF…") { model.openPDFPanel() }.keyboardShortcut("o")
+                Button("Open Web Page…") { model.openWebPagePanel() }.keyboardShortcut("o", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Close Tab") { model.closeCurrentTab() }.keyboardShortcut("w")
@@ -31,12 +37,22 @@ struct CoLearnerApp: App {
                     ForEach(AppModel.appearances, id: \.id) { a in Text(a.label).tag(a.id) }
                 }
                 Divider()
+                Button(model.thumbnailsHidden ? "Show Thumbnails" : "Hide Thumbnails") { model.toggleThumbnails() }
+                    .keyboardShortcut("t", modifiers: [.command, .option])
+                    .disabled(model.document == nil)
+                Divider()
+                // Web tabs: the page's text size, kept per book.
+                Button("Zoom In") { model.zoomWeb(1) }.keyboardShortcut("=", modifiers: .command).disabled(model.web == nil)
+                Button("Zoom Out") { model.zoomWeb(-1) }.keyboardShortcut("-", modifiers: .command).disabled(model.web == nil)
+                Button("Actual Size") { model.zoomWeb(0) }.keyboardShortcut("0", modifiers: .command).disabled(model.web == nil)
+                Divider()
             }
             CommandMenu("Slides") {
-                Button("Next Slide") { model.go(1) }.keyboardShortcut("]", modifiers: .command)
-                Button("Previous Slide") { model.go(-1) }.keyboardShortcut("[", modifiers: .command)
+                // In a web tab: Back and Forward, as in a browser.
+                Button(model.web == nil ? "Next Slide" : "Forward") { model.turn(1) }.keyboardShortcut("]", modifiers: .command)
+                Button(model.web == nil ? "Previous Slide" : "Back") { model.turn(-1) }.keyboardShortcut("[", modifiers: .command)
                 Divider()
-                Button("Ask About This Slide") {
+                Button(model.web == nil ? "Ask About This Slide" : "Ask About This Page") {
                     model.showPanel(.chat)
                     // The chat view is only back in the window after this update; focus it then.
                     DispatchQueue.main.async { model.chat.focusInput() }
@@ -45,7 +61,7 @@ struct CoLearnerApp: App {
                     model.showPanel(.chat)
                     DispatchQueue.main.async { model.chat.openSearch() }
                 }.keyboardShortcut("f", modifiers: [.command, .shift])
-                Button("Select Area of Slide…") { model.beginAreaSelection() }
+                Button(model.web == nil ? "Select Area of Slide…" : "Select Area of Page…") { model.beginAreaSelection() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                 Button("Ask About Walkthrough") { model.askAboutWalkthrough() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
@@ -105,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
+            model?.saveWebTabs()
             model?.chat.stopAll()
             // Pop-outs AppKit closes at quit stay "popped out" for the next launch (even with the main window closed).
             model?.popOuts.closeAllForQuit()

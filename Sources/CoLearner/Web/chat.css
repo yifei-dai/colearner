@@ -45,6 +45,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #where { flex: 1 1 150px; min-width: 0; display: flex; align-items: baseline; white-space: nowrap; overflow: hidden; }
 #where-deck { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #where-slide { color: var(--muted); margin-left: 6px; flex-shrink: 0; }
+/* A web tab: the book's name; the page's title (also on the tab) only where the header has room for both. */
+#head { container-type: inline-size; }
+#where.web #where-deck { flex-shrink: 0; max-width: 100%; }
+#where.web #where-slide { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 760px) { #where.web #where-slide { display: none; } }
 .ghost { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
 .ghost:hover { color: var(--ink); }
 

@@ -180,6 +180,11 @@ enum DeckContext {
         return "\(intro)\n\(open)>\n\(text)\n</\(tag)>\n"
     }
 
+    /// Text from a web page or a study page as an XML attribute value (one line, no double quotes).
+    static func attribute(_ s: String) -> String {
+        s.replacingOccurrences(of: "\"", with: "'").components(separatedBy: .newlines).joined(separator: " ")
+    }
+
     /// Slide numbers mentioned in a question: "slide 5", "slides 5-8", "p. 3", "pages 3 and 7", "slides 2, 4, and 9",
     /// "slide #4", "pg 12", "slides 3 through 6". `slidesOnly`: just "slide(s) N", for a question asked with the notes,
     /// where "p. 12" or "page 7" is a page of the notes.
@@ -201,5 +206,57 @@ enum DeckContext {
         }
         var seen = Set<Int>()
         return out.filter { $0 >= 1 && $0 <= pageCount && seen.insert($0).inserted }
+    }
+}
+
+/// What the assistants are told in a web tab, instead of a deck's slides: the book when a conversation starts, each
+/// page's text the first time a question is asked on it, and before each question where the student is on the page.
+enum WebContext {
+    static let maxPageText = 60_000
+
+    static func header(book: Deck) -> String {
+        var s = "<web_book>\n"
+        s += "Web book: \(book.title) — \(book.path)\n"
+        s += "The student reads it in Co-learner's browser; one conversation covers the pages they read in this tab. A page's "
+            + "text comes the first time a question is asked on it, and a picture of the screen whenever the part on "
+            + "screen changed.\n"
+        return s + "</web_book>\n\n"
+    }
+
+    /// The text of the page, for an assistant that hasn't had it yet.
+    static func page(_ t: WebPageText, url: String) -> String {
+        let text = t.text.replacingOccurrences(of: "</web_page>", with: "</ web_page>")
+        var s = "<web_page url=\"\(DeckContext.attribute(url))\" title=\"\(DeckContext.attribute(t.title))\">\n"
+        s += "Text of this page (extracted from the web page; formulas may be garbled or missing, so the picture of the "
+            + "screen is authoritative"
+        s += t.truncated ? "; the text stops after \(maxPageText.formatted()) characters" : ""
+        return s + "):\n\(text)\n</web_page>\n\n"
+    }
+
+    /// The line before the question. `view`: a picture of the screen goes with it (then the text on screen follows);
+    /// `sameView`: no new picture because the screen shows what the last one did.
+    static func questionNote(title: String, url: String, screen: WebScreen?, view: Bool, sameView: Bool,
+                             area: String?, images: [String], quote: Bool) -> String {
+        var note = "[The student is on the page “\(title)” (\(url))"
+        if let s = screen?.section, !s.isEmpty { note += ", reading “\(s.joined(separator: " › "))”" }
+        if let pos = screen?.position { note += ", \(Int((pos * 100).rounded()))% of the way down" }
+        note += ".]"
+        var parts: [String] = []
+        if view { parts.append("what is on screen (the page as the student sees it)") }
+        if let area { parts.append("the area of the page the student selected" + (area.isEmpty ? "" : " (in “\(area)”)")) }
+        parts += images
+        if !parts.isEmpty { note += " Attached images, in order: " + parts.joined(separator: ", ") + "." }
+        if !view && sameView { note += " The screen still shows the part of the page in the last picture." }
+        var about: [String] = []
+        if area != nil { about.append("the selected area") }
+        if quote { about.append("the quoted passage") }
+        if !images.isEmpty { about.append(images.count == 1 ? "the attached image" : "the attached images") }
+        if let last = about.popLast() {
+            note += " The question is about " + (about.isEmpty ? last : about.joined(separator: ", ") + " and " + last) + "."
+        }
+        if view, let v = screen?.visible.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty {
+            note += "\nText on screen:\n<on_screen>\n" + v.replacingOccurrences(of: "</on_screen>", with: "</ on_screen>") + "\n</on_screen>"
+        }
+        return note
     }
 }

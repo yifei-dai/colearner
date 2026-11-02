@@ -17,7 +17,16 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var runWhere: [String: (deck: String, conv: String)] = [:]
     /// What an assistant had seen before a run; put back if the run is stopped or fails (it may never have
     /// reached the session).
-    private var seenBefore: [String: (provider: Provider, fresh: Bool, by: [String]?, slides: [Int]?)] = [:]
+    private struct SeenBefore {
+        var provider: Provider
+        var fresh: Bool
+        var by: [String]?
+        var slides: [Int]?
+        var view: String?
+    }
+    private var seenBefore: [String: SeenBefore] = [:]
+    /// Web tabs: answers whose question waits for its page to be read (they start once it is).
+    private var awaitingPage = Set<String>()
     private var dirty: [String: ChatMessage] = [:]
     private var flushScheduled = false
     private var searchTask: Task<Void, Never>?
@@ -227,8 +236,21 @@ final class ChatController: NSObject, WKNavigationDelegate {
         let conv = store.current(deck.path)
         guard let i = conv.messages.firstIndex(where: { $0.id == messageID }), let p = conv.messages[i].provider,
               let q = conv.messages[..<i].last(where: { $0.role == .user }) else { return }
+        let again = { [weak self] in
+            self?.send(text: q.text, display: q.display, choice: p.rawValue, useArea: useArea, imageIDs: imageIDs, quoteID: quoteID)
+        }
+        // A web tab goes back to the question's page first, and asks once it is there.
+        if deck.isWeb, let page = q.page, page != model.page, let ref = model.webBooks.page(deck.path, page),
+           let u = URL(string: ref.url), let tab = model.web {
+            tab.load(u)
+            tab.whenLoaded(u) { [weak self] in
+                guard let self, self.model.deck?.path == deck.path, self.model.page == page else { return }
+                again()
+            }
+            return
+        }
         if let page = q.page, page != model.page, page >= 1, page <= model.pageCount { model.page = page }
-        send(text: q.text, display: q.display, choice: p.rawValue, useArea: useArea, imageIDs: imageIDs, quoteID: quoteID)
+        again()
     }
 
     func focusInput() {
@@ -273,6 +295,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
                     "created": result.createdAt.timeIntervalSince1970]
                 if let id = result.conversationID { row["conversationID"] = id }
                 if let page = result.page { row["page"] = page }
+                if let d = deck, d.isWeb, let page = result.page, let ref = model.webBooks.page(d.path, page) {
+                    row["pageLabel"] = ref.title.nonEmpty ?? WebAddress.label(ref.url)
+                }
                 if let provider = result.provider { row["provider"] = provider.rawValue }
                 return row
             }]
@@ -293,7 +318,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             return
         }
         store.setCurrent(destination.deck.path, destination.conversationID)
-        if let page = destination.page, (1...max(model.pageCount, 1)).contains(page) { model.page = page }
+        if let page = destination.page, (1...max(model.pageCount, 1)).contains(page) { model.goToPage(page) }
         model.refreshChatPages()
         model.showPanel(.chat)
         showCurrent()
@@ -309,7 +334,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         guard let d = model.deck else {
             area = nil
             dropQuote()
-            js("setThread", ["hasDeck": false, "messages": [], "pages": [], "provider": model.provider, "history": [],
+            js("setThread", ["hasDeck": false, "kind": "slides", "messages": [], "pages": [], "provider": model.provider, "history": [],
                              "area": NSNull(), "conversation": NSNull(), "images": imagesJS, "quote": NSNull(),
                              "processing": imagesInFlight] as [String: Any])
             return
@@ -320,7 +345,13 @@ final class ChatController: NSObject, WKNavigationDelegate {
         let conv = store.current(d.path)
         var areaJS: Any = NSNull()
         if let a = area { areaJS = ["page": a.page, "thumb": a.thumb] }
-        js("setThread", [
+        // A web tab: the page on screen and the titles of the pages questions were asked on.
+        var web: [String: Any] = ["kind": "slides"]
+        if d.isWeb {
+            web = ["kind": "web", "pageTitle": model.webPageTitle ?? "",
+                   "pageLabels": model.webBooks.labels(d.path, conv.pages + [model.page])]
+        }
+        js("setThread", web.merging([
             "hasDeck": true, "deckTitle": d.title, "deckPath": d.path, "page": model.page, "pageCount": model.pageCount,
             "messages": conv.messages.map(\.js), "pages": conv.pages, "provider": model.provider,
             "conversation": ["id": conv.id, "legacy": conv.legacy ?? false, "created": conv.created.timeIntervalSince1970],
@@ -333,7 +364,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             "images": imagesJS,
             "quote": pendingQuote?.js ?? NSNull(),
             "processing": imagesInFlight,
-        ] as [String: Any])
+        ] as [String: Any]) { _, b in b })
     }
 
     private func isVisible(_ deck: String, _ conv: String) -> Bool {
@@ -370,13 +401,14 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     // MARK: selected area
 
-    /// An area of a slide the user cut out (button "Select area", or ⌥-drag on the slide).
-    struct Area { var deck: String; var page: Int; var url: URL; var thumb: String }
+    /// An area of a slide the user cut out (button "Select area", or ⌥-drag on the slide); in a web tab, of the page,
+    /// with the section it is in.
+    struct Area { var deck: String; var page: Int; var url: URL; var thumb: String; var section: String? = nil }
     private(set) var area: Area?
 
-    func setArea(page: Int, url: URL, thumb: String) {
+    func setArea(page: Int, url: URL, thumb: String, section: String? = nil) {
         guard let d = model.deck else { return }
-        area = Area(deck: d.path, page: page, url: url, thumb: thumb)
+        area = Area(deck: d.path, page: page, url: url, thumb: thumb, section: section)
         js("setArea", ["page": page, "thumb": thumb])
         DispatchQueue.main.async { [weak self] in self?.focusInput() }
     }
@@ -522,11 +554,12 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     /// Part of an answer the student selected to ask about: whose answer it is and the slide it was given on. Only a
     /// finished answer (a streaming one is still being redrawn).
-    static func replyQuote(text: String, to m: ChatMessage) -> ChatQuote? {
+    /// `place`: where it was given, when that isn't "slide N" (a web tab: the page's title).
+    static func replyQuote(text: String, to m: ChatMessage, place: String? = nil) -> ChatQuote? {
         guard m.role == .assistant, m.status != .streaming else { return nil }
         let t = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(ChatQuote.maxText))
         guard !t.isEmpty else { return nil }
-        return ChatQuote(source: (m.provider?.displayName ?? "The assistant") + "’s answer", section: m.page.map { "slide \($0)" },
+        return ChatQuote(source: (m.provider?.displayName ?? "The assistant") + "’s answer", section: place ?? m.page.map { "slide \($0)" },
                          text: t, kind: "reply", provider: m.provider)
     }
 
@@ -602,7 +635,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         case "gotoSlide":
             if let page = ChatNavigation.slide(from: body, deckPath: model.deck?.path,
                 conversationID: model.deck.map { store.current($0.path).id }, pageCount: model.pageCount) {
-                model.page = page
+                model.goToPage(page)
             }
         case "selectArea":
             model.beginAreaSelection()
@@ -628,8 +661,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
         case "quoteReply":
             // "Reply" on part of an answer: the page sends the selected text and the answer it came from.
             guard let d = model.deck, let id = body["messageID"] as? String, let text = body["text"] as? String,
-                  let m = store.current(d.path).messages.first(where: { $0.id == id }),
-                  let q = Self.replyQuote(text: text, to: m) else { return }
+                  let m = store.current(d.path).messages.first(where: { $0.id == id }) else { return }
+            let place = d.isWeb ? m.page.map { n in model.webBooks.page(d.path, n)?.title.nonEmpty ?? "page \(n)" } : nil
+            guard let q = Self.replyQuote(text: text, to: m, place: place) else { return }
             setQuote(q, conversation: store.current(d.path).id)
         case "newChat":
             guard let d = model.deck else { return }
@@ -742,17 +776,106 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     /// One conversation per deck. Each assistant's session gets the deck's text once, then only what it hasn't
     /// seen: the image of the slide the student is on, images of slides the question mentions, a selected area, and
-    /// the other assistant's messages.
+    /// the other assistant's messages. In a web tab, the page instead of a slide (sendWeb).
     func send(text: String, display: String?, choice: String, useArea: Bool, imageIDs: [String] = [], quoteID: String? = nil) {
+        if model.deck?.isWeb == true {
+            sendWeb(text: text, display: display, choice: choice, useArea: useArea, imageIDs: imageIDs, quoteID: quoteID)
+            return
+        }
         guard model.refreshDocumentIfNeeded() else { return }
         guard let deck = model.deck, let doc = model.document else { return }
         let page = model.page, count = model.pageCount
-        let providers: [Provider] = choice == "both" ? [.claude, .codex] : [Provider(rawValue: choice) ?? .claude]
-        var conv = store.current(deck.path)
+        let providers = Self.providers(choice)
         // Only the assistants being asked must be free (one session can't answer two questions at once).
-        if conv.messages.contains(where: { $0.status == .streaming && providers.contains($0.provider ?? .claude) }) { return }
+        if isBusy(providers, deck: deck.path) { return }
+        let q = beginQuestion(deck: deck, page: page, text: text, display: display, providers: providers,
+                              useArea: useArea, imageIDs: imageIDs, quoteID: quoteID)
+        let conv = q.conv, convID = q.convID
+
+        // Asked with the notes, "p. 12" or "page 7" means a page of the notes.
+        let withNotes = q.quote?.kind == "notes" || q.shots.contains { $0.fromNotes }
+        let mentioned = DeckContext.referencedSlides(in: text, pageCount: count, slidesOnly: withNotes)
+        for (p, answerID) in zip(providers, q.answerIDs) {
+            let resume = conv.session(for: p)
+            let fresh = resume == nil
+            let seenSlides = fresh ? [] : Set(conv.seenSlides?[p.rawValue] ?? [])
+            var prompt = ""
+            if fresh {
+                prompt += DeckContext.header(deck: deck, texts: model.slideTexts, includeFiles: p == .claude)
+                prompt += Self.transcript(Array(q.prior.suffix(12)), tag: "earlier_conversation_about_this_deck")
+            } else {
+                prompt += unseenTranscript(conv, for: p, prior: q.prior)
+            }
+            var images: [URL] = []
+            var shown: [Int] = []
+            for n in [page] + mentioned where !seenSlides.contains(n) && !shown.contains(n) && shown.count < 5 {
+                if let u = SlideImages.png(deck: deck, document: doc, page: n) { images.append(u); shown.append(n) }
+            }
+            if let a = q.area { images.append(a.url) }
+            images += q.shots.map(\.url)
+            if let quote = q.quote { prompt += DeckContext.excerpt(quote, for: p, otherChat: q.quoteFromOtherChat) }
+            prompt += DeckContext.questionNote(page: page, count: count, slides: shown, area: q.area != nil,
+                                               images: q.shots.map(\.detail), quote: q.quote != nil)
+                + "\n<question>\n\(text)\n</question>"
+
+            let before = SeenBefore(provider: p, fresh: fresh, by: conv.seenBy?[p.rawValue], slides: conv.seenSlides?[p.rawValue],
+                                    view: conv.seenViews?[p.rawValue])
+            store.update(deck.path, convID) { c in
+                var sb = c.seenBy ?? [:]
+                sb[p.rawValue] = q.prior.map(\.id) + [q.user.id]
+                c.seenBy = sb
+                var ss = c.seenSlides ?? [:]
+                ss[p.rawValue] = Array(Set(seenSlides).union(shown)).sorted()
+                c.seenSlides = ss
+            }
+            let cfg = addAnswer(answerID, by: p, deck: deck.path, conv: convID, page: page, activity: "starting…")
+            seenBefore[answerID] = before
+            var dirs = readableDirs(for: deck)
+            if p == .claude { dirs.append(SlideImages.folder(for: deck)) }
+            run(answerID, by: p, deck: deck.path, conv: convID, resume: resume,
+                BackendRequest(prompt: prompt, instructions: Prompts.tutor, imageURLs: images, resume: resume,
+                               model: cfg.model, effort: cfg.effort, fastMode: cfg.fast, readableDirs: dirs))
+        }
+        // Claude may open any slide image of the deck; make them all once (in the background).
+        let slideDir = SlideImages.folder(for: deck).path
+        if !prerendered.contains(slideDir) {
+            prerendered.insert(slideDir)
+            SlideImages.prerenderAll(deck: deck)
+        }
+        store.save(deck.path)
+        model.refreshChatPages()
+    }
+
+    private static func providers(_ choice: String) -> [Provider] {
+        choice == "both" ? [.claude, .codex] : [Provider(rawValue: choice) ?? .claude]
+    }
+
+    /// One of these assistants is still answering in the deck's conversation.
+    private func isBusy(_ providers: [Provider], deck: String) -> Bool {
+        store.current(deck).messages.contains { $0.status == .streaming && providers.contains($0.provider ?? .claude) }
+    }
+
+    /// A question as it went out: in the conversation (its message on screen), with what it took from the chat box.
+    private struct Question {
+        var conv: Conversation
+        var convID: String
+        var user: ChatMessage
+        /// Everything finished before it.
+        var prior: [ChatMessage]
+        var area: Area?
+        var shots: [PendingImage]
+        var quote: ChatQuote?
+        var quoteFromOtherChat: Bool
+        /// Its answers' ids, one per assistant asked (known before any run starts: a run can fail inside start()).
+        var answerIDs: [String]
+    }
+
+    /// Puts the question in the deck's conversation and takes what goes with it out of the chat box (an area, the
+    /// pictures the chat box showed, a quote), to come back if no answer does.
+    private func beginQuestion(deck: Deck, page: Int, text: String, display: String?, providers: [Provider],
+                               useArea: Bool, imageIDs: [String], quoteID: String?) -> Question {
         sourcesDidChange(for: deck)
-        conv = store.current(deck.path)
+        let conv = store.current(deck.path)
         let convID = conv.id
         let areaNow = useArea ? area.flatMap { $0.deck == deck.path && $0.page == page ? $0 : nil } : nil
         // Only what the chat box showed goes (a picture still being read waits for the next question).
@@ -772,7 +895,6 @@ final class ChatController: NSObject, WKNavigationDelegate {
         store.update(deck.path, convID) { $0.messages.append(user) }
         push(user, deck: deck.path, conv: convID, immediate: true)
         if areaNow != nil { clearArea() }   // an area goes with one question, and so do pictures and a quote
-        // The answers' ids, known before any run starts (a run can fail inside start()).
         let answerIDs = providers.map { _ in UUID().uuidString }
         if !shots.isEmpty || quoteNow != nil {
             pendingImages.removeAll { p in shots.contains { $0.id == p.id } }
@@ -781,81 +903,159 @@ final class ChatController: NSObject, WKNavigationDelegate {
             askedWith[user.id] = AskedWith(images: shots, quote: quoteNow, deck: deck.path, conversation: convID,
                                            quoteConversation: quoteFrom, runs: Set(answerIDs))
         }
+        return Question(conv: conv, convID: convID, user: user, prior: prior, area: areaNow, shots: shots, quote: quoteNow,
+                        quoteFromOtherChat: quoteFromOtherChat, answerIDs: answerIDs)
+    }
 
-        // Asked with the notes, "p. 12" or "page 7" means a page of the notes.
-        let withNotes = quoteNow?.kind == "notes" || shots.contains { $0.fromNotes }
-        let mentioned = DeckContext.referencedSlides(in: text, pageCount: count, slidesOnly: withNotes)
-        for (p, answerID) in zip(providers, answerIDs) {
-            let resume = conv.session(for: p)
-            let fresh = resume == nil
-            let seenSlides = fresh ? [] : Set(conv.seenSlides?[p.rawValue] ?? [])
-            var prompt = ""
-            if fresh {
-                prompt += DeckContext.header(deck: deck, texts: model.slideTexts, includeFiles: p == .claude)
-                prompt += Self.transcript(Array(prior.suffix(12)), tag: "earlier_conversation_about_this_deck")
-            } else {
-                // The session has its own turns; add what it hasn't seen: the other assistant's answers and
-                // questions that were sent only to the other one.
-                let seen = Set(conv.seenBy?[p.rawValue] ?? prior.map(\.id))
-                let unseen = prior.filter { !seen.contains($0.id) && ($0.provider != p || $0.notInSession == true) }
-                prompt += Self.transcript(unseen, tag: "messages_in_this_chat_you_have_not_seen", you: p)
-            }
-            var images: [URL] = []
-            var shown: [Int] = []
-            for n in [page] + mentioned where !seenSlides.contains(n) && !shown.contains(n) && shown.count < 5 {
-                if let u = SlideImages.png(deck: deck, document: doc, page: n) { images.append(u); shown.append(n) }
-            }
-            if let a = areaNow { images.append(a.url) }
-            images += shots.map(\.url)
-            if let q = quoteNow { prompt += DeckContext.excerpt(q, for: p, otherChat: quoteFromOtherChat) }
-            prompt += DeckContext.questionNote(page: page, count: count, slides: shown, area: areaNow != nil,
-                                               images: shots.map(\.detail), quote: quoteNow != nil)
-                + "\n<question>\n\(text)\n</question>"
+    /// For a session that has its own turns: what it hasn't seen, the other assistant's answers and questions that
+    /// were sent only to the other one.
+    private func unseenTranscript(_ conv: Conversation, for p: Provider, prior: [ChatMessage], web: Deck? = nil) -> String {
+        let seen = Set(conv.seenBy?[p.rawValue] ?? prior.map(\.id))
+        let unseen = prior.filter { !seen.contains($0.id) && ($0.provider != p || $0.notInSession == true) }
+        guard let web else { return Self.transcript(unseen, tag: "messages_in_this_chat_you_have_not_seen", you: p) }
+        return Self.transcript(unseen, tag: "messages_in_this_chat_you_have_not_seen", you: p, place: webPlace(web), unit: "page")
+    }
 
-            let before = (provider: p, fresh: fresh, by: conv.seenBy?[p.rawValue], slides: conv.seenSlides?[p.rawValue])
-            store.update(deck.path, convID) { c in
-                var sb = c.seenBy ?? [:]
-                sb[p.rawValue] = prior.map(\.id) + [user.id]
-                c.seenBy = sb
-                var ss = c.seenSlides ?? [:]
-                ss[p.rawValue] = Array(Set(seenSlides).union(shown)).sorted()
-                c.seenSlides = ss
-            }
-            var a = ChatMessage(id: answerID, role: .assistant, provider: p, text: "", status: .streaming)
-            a.activity = "starting…"
-            a.page = page
-            let (mid, eff) = p == .claude ? (model.claudeModel, model.claudeEffort) : (model.codexModel, model.codexEffort)
-            let fastMode = p == .codex && model.codexFastMode
-            a.model = ModelCatalog.label(p, mid) + " · " + eff + (fastMode ? " · Fast" : "")
-            seenBefore[a.id] = before
-            store.update(deck.path, convID) { $0.messages.append(a) }
-            push(a, deck: deck.path, conv: convID, immediate: true)
+    /// Where a question in a web tab was asked: “Linear Transformations” (its page's title), or "page 4".
+    private func webPlace(_ book: Deck) -> (Int) -> String {
+        let books = model.webBooks
+        return { n in books.page(book.path, n)?.title.nonEmpty.map { "on “\($0)”" } ?? "page \(n)" }
+    }
 
-            var dirs = readableDirs(for: deck)
-            if p == .claude { dirs.append(SlideImages.folder(for: deck)) }
-            let req = BackendRequest(prompt: prompt, instructions: Prompts.tutor, imageURLs: images, resume: resume,
-                                     model: mid, effort: eff, fastMode: fastMode, readableDirs: dirs)
-            let id = a.id
-            let backend: Backend = p == .claude ? claude : codex
-            runWhere[id] = (deck.path, convID)
-            let handle = backend.start(req) { [weak self] ev in
-                self?.apply(ev, id: id, provider: p, deck: deck.path, conv: convID, usedResume: resume)
-            }
-            if let handle { running[id] = handle }
+    /// The answer's bubble (streaming, `activity` until text comes), labelled with the model and effort asked now.
+    private func addAnswer(_ id: String, by p: Provider, deck: String, conv convID: String, page: Int,
+                           activity: String) -> (model: String, effort: String, fast: Bool) {
+        var a = ChatMessage(id: id, role: .assistant, provider: p, text: "", status: .streaming)
+        a.activity = activity
+        a.page = page
+        let (mid, eff) = p == .claude ? (model.claudeModel, model.claudeEffort) : (model.codexModel, model.codexEffort)
+        let fastMode = p == .codex && model.codexFastMode
+        a.model = ModelCatalog.label(p, mid) + " · " + eff + (fastMode ? " · Fast" : "")
+        store.update(deck, convID) { $0.messages.append(a) }
+        push(a, deck: deck, conv: convID, immediate: true)
+        return (mid, eff, fastMode)
+    }
+
+    /// Starts the assistant's run for the answer `id`.
+    private func run(_ id: String, by p: Provider, deck: String, conv convID: String, resume: String?, _ req: BackendRequest) {
+        #if DEBUG
+        DebugScript.logRequest(req, provider: p)
+        #endif
+        let backend: Backend = p == .claude ? claude : codex
+        runWhere[id] = (deck, convID)
+        let handle = backend.start(req) { [weak self] ev in
+            self?.apply(ev, id: id, provider: p, deck: deck, conv: convID, usedResume: resume)
         }
-        // Claude may open any slide image of the deck; make them all once (in the background).
-        let slideDir = SlideImages.folder(for: deck).path
-        if !prerendered.contains(slideDir) {
-            prerendered.insert(slideDir)
-            SlideImages.prerenderAll(deck: deck)
+        if let handle { running[id] = handle }
+    }
+
+    // MARK: asking in a web tab
+
+    /// A question in a web tab. It shows at once, with its answers "reading the page…" while the page is read (its
+    /// text, what is on screen and a picture of it); then each assistant gets the book once, a page's text the first
+    /// time a question is asked on it, and the picture of the screen when that part of the page changed since the last
+    /// picture it got. Claude has no tools here: nothing on a web page can make it read a file.
+    private func sendWeb(text: String, display: String?, choice: String, useArea: Bool, imageIDs: [String], quoteID: String?) {
+        guard let deck = model.deck, deck.isWeb, let tab = model.web else { return }
+        let page = model.page
+        let providers = Self.providers(choice)
+        if isBusy(providers, deck: deck.path) { return }
+        let q = beginQuestion(deck: deck, page: page, text: text, display: display, providers: providers,
+                              useArea: useArea, imageIDs: imageIDs, quoteID: quoteID)
+        var configs: [String: (model: String, effort: String, fast: Bool)] = [:]
+        for (p, id) in zip(providers, q.answerIDs) {
+            configs[id] = addAnswer(id, by: p, deck: deck.path, conv: q.convID, page: page, activity: "reading the page…")
+            runWhere[id] = (deck.path, q.convID)   // Stop finds it while it waits
+            awaitingPage.insert(id)
         }
         store.save(deck.path)
         model.refreshChatPages()
+        tab.snapshot(root: deck.path) { [weak self] snap in
+            self?.askWeb(q, deck: deck, page: page, providers: providers, configs: configs, snap: snap)
+        }
+    }
+
+    private func askWeb(_ q: Question, deck: Deck, page: Int, providers: [Provider],
+                        configs: [String: (model: String, effort: String, fast: Bool)], snap: WebSnapshot) {
+        // Answers stopped (or their chat deleted) while the page was read are left out.
+        let asked = zip(providers, q.answerIDs).filter { awaitingPage.remove($0.1) != nil }
+        guard !asked.isEmpty, let conv = store.conversation(deck.path, q.convID) else { return }
+        let url = snap.url.map { WebAddress.pageKey($0) } ?? model.webBooks.page(deck.path, page)?.url ?? deck.path
+        let title = snap.page?.title.nonEmpty ?? snap.title.nonEmpty ?? model.webBooks.page(deck.path, page)?.title.nonEmpty
+            ?? WebAddress.label(url)
+        let viewKey = snap.viewKey
+        // The text is of the question's page (not one still on screen while the next one loads): only then does it count
+        // as that page's text.
+        let askedPage = model.webBooks.page(deck.path, page)?.url
+        let readThisPage = snap.page?.url.flatMap(URL.init(string:)).map(WebAddress.pageKey).map { $0 == askedPage } ?? true
+        var viewShot: PendingImage?   // written once, for each assistant that needs it
+        for (p, id) in asked {
+            let resume = conv.session(for: p)
+            let fresh = resume == nil
+            let seenPages = fresh ? [] : Set(conv.seenSlides?[p.rawValue] ?? [])
+            let lastView = fresh ? nil : conv.seenViews?[p.rawValue]
+            var prompt = ""
+            if fresh {
+                prompt += WebContext.header(book: deck)
+                prompt += Self.transcript(Array(q.prior.suffix(12)), tag: "earlier_conversation_about_this_web_book",
+                                          place: webPlace(deck), unit: "page")
+            } else {
+                prompt += unseenTranscript(conv, for: p, prior: q.prior, web: deck)
+            }
+            var newPages: [Int] = []
+            if !seenPages.contains(page), readThisPage, let t = snap.page, !t.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                prompt += WebContext.page(t, url: url)
+                newPages.append(page)
+            }
+            var images: [URL] = []
+            var sentView = false
+            if lastView != viewKey, let image = snap.view {
+                if viewShot == nil { viewShot = ImageAttachments.make(image: image, label: "On screen", detail: "") }
+                if let v = viewShot { images.append(v.url); sentView = true }
+            }
+            if let a = q.area { images.append(a.url) }
+            images += q.shots.map(\.url)
+            if let quote = q.quote { prompt += DeckContext.excerpt(quote, for: p, otherChat: q.quoteFromOtherChat) }
+            prompt += WebContext.questionNote(title: title, url: url, screen: snap.screen, view: sentView,
+                                              sameView: lastView == viewKey, area: q.area.map { $0.section ?? "" },
+                                              images: q.shots.map(\.detail), quote: q.quote != nil)
+                + "\n<question>\n\(q.user.text)\n</question>"
+
+            let before = SeenBefore(provider: p, fresh: fresh, by: conv.seenBy?[p.rawValue], slides: conv.seenSlides?[p.rawValue],
+                                    view: conv.seenViews?[p.rawValue])
+            store.update(deck.path, q.convID) { c in
+                var sb = c.seenBy ?? [:]
+                sb[p.rawValue] = q.prior.map(\.id) + [q.user.id]
+                c.seenBy = sb
+                var ss = c.seenSlides ?? [:]
+                ss[p.rawValue] = Array(seenPages.union(newPages)).sorted()
+                c.seenSlides = ss
+                if sentView {
+                    var sv = c.seenViews ?? [:]
+                    sv[p.rawValue] = viewKey
+                    c.seenViews = sv
+                }
+                if let i = c.messages.firstIndex(where: { $0.id == id }), c.messages[i].status == .streaming {
+                    c.messages[i].activity = "starting…"
+                }
+            }
+            if let m = store.conversation(deck.path, q.convID)?.messages.first(where: { $0.id == id }) {
+                push(m, deck: deck.path, conv: q.convID, immediate: true)
+            }
+            seenBefore[id] = before
+            let cfg = configs[id] ?? (model: model.claudeModel, effort: model.claudeEffort, fast: false)
+            run(id, by: p, deck: deck.path, conv: q.convID, resume: resume,
+                BackendRequest(prompt: prompt, instructions: Prompts.webTutor, imageURLs: images, resume: resume,
+                               model: cfg.model, effort: cfg.effort, fastMode: cfg.fast, readableDirs: [], toolsOff: true))
+        }
+        store.save(deck.path)
     }
 
     /// Earlier messages as a quoted block, for an assistant that has not seen them. Pictures are not sent again; the
     /// assistant is told which were there (by their labels). A quoted passage is text, so it comes along.
-    static func transcript(_ msgs: [ChatMessage], tag: String, you: Provider? = nil) -> String {
+    /// `place` names where a message was asked ("slide 4"; in a web tab, the page's title), `unit` what an area is of.
+    static func transcript(_ msgs: [ChatMessage], tag: String, you: Provider? = nil,
+                           place: (Int) -> String = { "slide \($0)" }, unit: String = "slide") -> String {
         guard !msgs.isEmpty else { return "" }
         var s = "<\(tag)>\n"
         for m in msgs {
@@ -863,10 +1063,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
             if m.role == .assistant, let you, m.provider == you {
                 who += " (your own earlier answer as the student saw it; it was cut off before it reached you)"
             }
-            let whereAt = m.page.map { ", slide \($0)" } ?? ""
+            let whereAt = m.page.map { ", " + place($0) } ?? ""
             var body = m.text.count > 2500 ? String(m.text.prefix(2500)) + " …" : m.text
             if m.role == .user {
-                if m.areaThumb != nil { body += " [asked about an area of the slide that the student selected]" }
+                if m.areaThumb != nil { body += " [asked about an area of the \(unit) that the student selected]" }
                 if let images = m.images, !images.isEmpty {
                     let names = images.map { "“\($0.label)”" }.joined(separator: ", ")
                     body += " [\(images.count == 1 ? "an image" : "\(images.count) images") the student attached went with this, "
@@ -972,6 +1172,11 @@ final class ChatController: NSObject, WKNavigationDelegate {
         var ss = c.seenSlides ?? [:]
         ss[b.provider.rawValue] = b.slides
         c.seenSlides = ss
+        if b.view != nil || c.seenViews?[b.provider.rawValue] != nil {
+            var sv = c.seenViews ?? [:]
+            sv[b.provider.rawValue] = b.view
+            c.seenViews = sv.isEmpty ? nil : sv
+        }
     }
 
     /// Stop: the answers still running in the deck's current conversation (on any slide), from the assistants
@@ -981,6 +1186,22 @@ final class ChatController: NSObject, WKNavigationDelegate {
         let conv = store.current(d.path), convID = conv.id
         for (id, w) in runWhere where w.deck == d.path && w.conv == convID {
             if let providers, let p = conv.messages.first(where: { $0.id == id })?.provider, !providers.contains(p) { continue }
+            // Still waiting for its web page to be read: it never started, so it just ends here.
+            if awaitingPage.remove(id) != nil {
+                runWhere.removeValue(forKey: id)
+                store.update(d.path, convID) { c in
+                    if let i = c.messages.firstIndex(where: { $0.id == id }), c.messages[i].status == .streaming {
+                        c.messages[i].status = .stopped
+                        c.messages[i].activity = nil
+                    }
+                }
+                store.save(d.path)
+                if let m = store.current(d.path).messages.first(where: { $0.id == id }) {
+                    push(m, deck: d.path, conv: convID, immediate: true)
+                    answerEnded(m)
+                }
+                continue
+            }
             guard let h = running.removeValue(forKey: id) else { continue }   // already stopping
             stopping[id] = h
             h.cancel()
@@ -1060,6 +1281,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         guard a.runModal() == .alertFirstButtonReturn else { return }
         for (rid, w) in runWhere where w.deck == d.path && w.conv == id {
             running.removeValue(forKey: rid)?.cancel()
+            awaitingPage.remove(rid)
             stopping.removeValue(forKey: rid)
             saved.remove(rid)
             runWhere.removeValue(forKey: rid)
@@ -1075,6 +1297,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
     /// On quit: keep what has streamed so far, mark it stopped, save, and end the CLIs right away.
     func stopAll() {
         askedWith.removeAll()   // nothing goes back into the chat box on the way out
+        awaitingPage.removeAll()   // never started: marked stopped below with the rest
         // Stop the way the Stop button does (SIGINT), so Claude Code keeps the partial answer in its session;
         // give the CLIs a moment, then end whatever is still running.
         for (id, h) in running { h.cancel(); stopping[id] = h }

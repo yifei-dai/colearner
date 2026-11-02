@@ -74,7 +74,7 @@ final class FileTracker {
     func followLinks(_ sections: inout SectionsFile) -> [PathMove] {
         var moves: [PathMove] = []
         for s in sections.sections.indices {
-            for i in sections.sections[s].items.indices {
+            for i in sections.sections[s].items.indices where sections.sections[s].items[i].kind != .web {
                 let item = sections.sections[s].items[i]
                 let found: (path: String, bookmark: Data)?
                 if FileRevision.read(item.path) != nil {
@@ -259,7 +259,8 @@ final class LibraryWatcher {
 
     func watch(_ sections: SectionsFile) {
         let want = Set(sections.sections.flatMap { s in
-            s.items.map { $0.kind == .folder ? $0.path : URL(fileURLWithPath: $0.path).deletingLastPathComponent().path }
+            s.items.filter { $0.kind != .web }
+                .map { $0.kind == .folder ? $0.path : URL(fileURLWithPath: $0.path).deletingLastPathComponent().path }
         }).sorted()
         guard want != paths else { return }
         stop()

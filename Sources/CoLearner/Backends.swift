@@ -12,6 +12,14 @@ struct BackendRequest {
     var fastMode: Bool = false
     /// Folders the assistant may read (Claude only).
     var readableDirs: [URL] = []
+    /// No tools (web tabs): everything the assistant needs comes with the message, so nothing a web page says can make
+    /// it open a file, look at a picture on disk or reach an app. Claude: `--tools ""`; Codex: its tools that read or
+    /// reach anything switched off (as config, which an older Codex without one of them ignores).
+    var toolsOff = false
+
+    static let codexToolsOff = ["view_image", "apps", "plugins", "browser_use", "browser_use_external",
+                                "browser_use_full_cdp_access", "in_app_browser", "computer_use", "memories", "multi_agent",
+                                "image_generation"]
 }
 
 enum BackendEvent {
@@ -165,6 +173,7 @@ final class CodexBackend: Backend {
                     "-c", "web_search=disabled",
                     "--disable", "shell_tool", "--disable", "unified_exec",
                     "-c", "developer_instructions=\(tomlString)"]
+        if req.toolsOff { for f in BackendRequest.codexToolsOff { args += ["-c", "features.\(f)=false"] } }
         if let r = req.resume { args += ["resume", r] }
         for img in req.imageURLs { args += ["-i", img.path] }
         args += ["--", req.prompt]
@@ -333,7 +342,7 @@ final class ClaudeBackend: Backend {
         var args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                     "--include-partial-messages",
                     "--model", model, "--effort", effort,
-                    "--tools", "Read,Grep,Glob",
+                    "--tools", req.toolsOff ? "" : "Read,Grep,Glob",
                     // Read works on any path in -p mode; these deny rules keep Claude out of the handwritten scans.
                     "--disallowedTools", "Read(//**/*inclass*)", "Read(//**/*_scribing_*.pdf)",
                     "Grep(//**/*inclass*)", "Grep(//**/*_scribing_*.pdf)",

@@ -17,6 +17,12 @@ protocol LibraryActions: AnyObject {
     func removeSection(_ id: String)
     /// Renames the PDF on disk; returns what went wrong, or nil.
     func renameFile(_ path: String, to name: String) -> String?
+    /// Link Web Page… in a section's menus: asks for the address and links it.
+    func linkWebPage(to section: String)
+}
+
+extension LibraryActions {
+    func linkWebPage(to section: String) {}
 }
 
 /// One row of the lecture page: a section heading, an item linked to it, something inside a linked folder, the
@@ -39,7 +45,10 @@ final class LibraryRow: NSObject {
 
     var path: String? { node?.path ?? item?.path }
     var isFolder: Bool { node?.isFolder ?? (item?.kind == .folder) }
-    var isFile: Bool { node.map { !$0.isFolder } ?? false }
+    /// A PDF.
+    var isFile: Bool { node.map { !$0.isFolder && !$0.isWeb } ?? false }
+    /// A web page linked to the section.
+    var isWeb: Bool { node?.isWeb ?? (item?.kind == .web) }
     /// A linked folder or PDF that can't be found.
     var missing: Bool { kind == .link && node == nil }
 
@@ -163,7 +172,7 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
             }
             if s.links.isEmpty {
                 let e = row("e|" + s.id, .empty, s.id)
-                e.title = "Nothing linked yet. Use + to link a folder or PDFs, or drop them here from Finder."
+                e.title = "Nothing linked yet. Use + to link a folder, PDFs or a web page, or drop them here from Finder."
                 kids.append(e)
             }
             if !s.hidden.isEmpty {
@@ -280,7 +289,11 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
 
     private func countText(_ r: LibraryRow) -> String {
         let n = r.children.reduce(0) { $0 + ($1.kind == .hiddenGroup ? 0 : pdfCount($1)) }
-        return n == 1 ? "1 PDF" : "\(n) PDFs"
+        let web = r.children.filter(\.isWeb).count
+        let pdfs = n == 1 ? "1 PDF" : "\(n) PDFs"
+        guard web > 0 else { return pdfs }
+        let pages = web == 1 ? "1 web page" : "\(web) web pages"
+        return n == 0 ? pages : pdfs + " · " + pages
     }
 
     private func pdfCount(_ r: LibraryRow) -> Int {
@@ -379,6 +392,7 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         let m = NSMenu()
         m.addItem(item("Link Folder…") { [weak self] in self?.actions?.linkPanel(.folder, to: section) })
         m.addItem(item("Link PDFs…") { [weak self] in self?.actions?.linkPanel(.file, to: section) })
+        m.addItem(item("Link Web Page…") { [weak self] in self?.actions?.linkWebPage(to: section) })
         m.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
 
@@ -392,6 +406,7 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         [
             item("Link Folder…") { [weak self] in self?.actions?.linkPanel(.folder, to: section) },
             item("Link PDFs…") { [weak self] in self?.actions?.linkPanel(.file, to: section) },
+            item("Link Web Page…") { [weak self] in self?.actions?.linkWebPage(to: section) },
             .separator(),
             item("Rename Section") { [weak self] in self?.beginRename(section: section) },
             item("Remove Section…") { [weak self] in self?.actions?.removeSection(section) },
@@ -423,6 +438,12 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
                 self?.actions?.editSections { $0.unlink(item: id, from: r.section) }
             }
             if r.missing { return [unlink] }
+            if r.isWeb, let p = path {
+                return [item("Open") { [weak self] in self?.actions?.openDeck(at: p) },
+                        item("Open in Browser") { if let u = URL(string: p) { NSWorkspace.shared.open(u) } },
+                        item("Rename…") { [weak self] in self?.beginEditing(r) },
+                        .separator(), unlink]
+            }
             return [open, finder, rename, .separator(), unlink].compactMap { $0 }
         case .node:
             guard let p = path else { return [] }
@@ -484,6 +505,8 @@ final class LibraryOutline: NSObject, NSOutlineViewDataSource, NSOutlineViewDele
         guard !editCancelled, !text.isEmpty, text != e.row.title else { e.field.stringValue = e.row.title; return }
         if e.row.kind == .section {
             actions?.editSections { $0.rename(section: e.row.section, to: text) }
+        } else if e.row.isWeb, let id = e.row.item?.id {
+            actions?.editSections { $0.rename(webItem: id, in: e.row.section, to: text) }
         } else if let p = e.row.path, let problem = actions?.renameFile(p, to: text) {
             e.field.stringValue = e.row.title
             let a = NSAlert()
@@ -860,14 +883,14 @@ final class ItemCell: NSTableCellView, EditableCell {
         switch r.kind {
         case .hiddenGroup: symbol = "eye.slash"
         case .empty: symbol = nil
-        default: symbol = r.isFolder ? "folder" : "doc.text"
+        default: symbol = r.isWeb ? "globe" : r.isFolder ? "folder" : "doc.text"
         }
         icon.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
         icon.contentTintColor = r.isFolder && r.kind != .hiddenNode && !r.missing ? .controlAccentColor : .secondaryLabelColor
         icon.isHidden = symbol == nil
         switch r.kind {
         case .link where r.missing: note.stringValue = "can't be found (moved to another disk or deleted)"
-        case .link: note.stringValue = r.isFolder ? "linked folder" : "linked PDF"
+        case .link: note.stringValue = r.isWeb ? "web page" : r.isFolder ? "linked folder" : "linked PDF"
         case .hiddenNode: note.stringValue = "hidden"
         default: note.stringValue = ""
         }

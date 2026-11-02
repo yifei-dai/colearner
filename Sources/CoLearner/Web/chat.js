@@ -15,13 +15,14 @@
     "sliders or buttons where they help, no external files). After the block, say in 2-3 sentences what to look at and what to try.";
   function quick(action) {
     const explain = action === "explain";
+    const unit = isWeb() ? "page" : "slide";
     if (state.area) {
       return explain
         ? { display: "Explain this area", prompt:
-            "Explain the selected area of this slide (the attached crop). Start with the one-sentence takeaway. Then go through " +
+            "Explain the selected area of this " + unit + " (the attached crop). Start with the one-sentence takeaway. Then go through " +
             "it piece by piece: define every symbol and say in words what each equation or figure means. Relate it to the rest " +
-            "of the slide only where that helps." }
-        : { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this slide (the attached crop). " + VIS_RULES };
+            "of the " + unit + " only where that helps." }
+        : { display: "Visualize this area", prompt: "Visualize the idea in the selected area of this " + unit + " (the attached crop). " + VIS_RULES };
     }
     const q = quoted();
     if (q && q.kind === "reply") {
@@ -46,9 +47,17 @@
       return explain
         ? { display: "Explain the " + shot, prompt:
             "Explain the attached " + shot + ". Start with the one-sentence takeaway. Then go through " + it + " piece by piece: " +
-            "define every symbol and say in words what each equation or figure means. Relate " + it + " to this deck's slides " +
-            "where that helps." }
+            "define every symbol and say in words what each equation or figure means. Relate " + it +
+            (isWeb() ? " to the page I'm reading " : " to this deck's slides ") + "where that helps." }
         : { display: "Visualize the " + shot, prompt: "Visualize the key idea in the attached " + shot + ". " + VIS_RULES };
+    }
+    if (isWeb()) {
+      return explain
+        ? { display: "Explain what’s shown", prompt:
+            "Explain the part of this page I have on screen. Start with the one-sentence takeaway. Then go through it piece by " +
+            "piece: define every symbol, say in words what each equation or figure means, and connect it to the rest of the " +
+            "page when that helps." }
+        : { display: "Visualize what’s shown", prompt: "Visualize the key idea of the part of this page I have on screen. " + VIS_RULES };
     }
     return explain
       ? { display: "Explain this slide", prompt:
@@ -61,10 +70,20 @@
 
   // messages = the whole conversation about the deck; each carries the slide it was asked on.
   // images/quote: what waits in the chat box for the next question ([{id, label, thumb}], {id, source, section?, text, kind}).
-  let state = { hasDeck: false, deckTitle: "", deckPath: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
+  let state = { hasDeck: false, kind: "slides", deckTitle: "", deckPath: "", page: 0, pageCount: 0, messages: [], pages: [], provider: "claude",
                 conversation: null, history: [], area: null, images: [], quote: null, processing: 0 };
   let viewAll = false;   // "This slide" (default) or "All"
   function visible(m) { return viewAll || m.page == null || m.page === state.page; }
+  // A web tab (state.kind "web"): pages instead of slides. Questions keep the page's number in the book; its title
+  // comes in state.pageLabels.
+  function isWeb() { return state.kind === "web"; }
+  /// "slide 4"; in a web tab the page's title ("page 4" until it has one).
+  function pageName(p) {
+    if (!isWeb()) return "slide " + p;
+    const t = state.pageLabels && state.pageLabels[String(p)];
+    return typeof t === "string" && t.trim() ? t.trim() : "page " + p;
+  }
+  function clip(s, n) { return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s; }
   // The app owns the pictures and the quote (by id); the page shows them and says which ones a question took.
   function pics() {
     return Array.isArray(state.images) ? state.images.filter((i) => i && typeof i.id === "string") : [];
@@ -126,26 +145,39 @@
   /// "Claude is answering on slide 7" when that answer isn't on screen.
   function busyNote() {
     const away = state.messages.filter((m) => m.role === "assistant" && m.status === "streaming" && !visible(m));
-    return away.map((m) => NAMES[m.provider] + " is answering on slide " + m.page).join(" · ");
+    return away.map((m) => NAMES[m.provider] + " is answering on " + (isWeb() ? "“" + clip(pageName(m.page), 40) + "”" : "slide " + m.page)).join(" · ");
   }
 
   function renderHeader() {
     $("#where-deck").textContent = state.hasDeck ? state.deckTitle : "No slides open";
-    $("#where-slide").textContent = state.hasDeck ? "slide " + state.page + " / " + state.pageCount : "";
-    for (const b of document.querySelectorAll("#viewseg button")) b.classList.toggle("on", (b.dataset.v === "all") === viewAll);
+    const pageTitle = isWeb() ? String(state.pageTitle || "") : "";
+    $("#where-slide").textContent = !state.hasDeck ? "" : isWeb() ? (pageTitle && pageTitle !== state.deckTitle ? pageTitle : "")
+      : "slide " + state.page + " / " + state.pageCount;
+    $("#where-slide").title = isWeb() ? pageTitle : "";
+    $("#where").classList.toggle("web", isWeb());   // the book's name first; the page's title gives way
+    for (const b of document.querySelectorAll("#viewseg button")) {
+      b.classList.toggle("on", (b.dataset.v === "all") === viewAll);
+      if (b.dataset.v === "slide") {
+        b.textContent = isWeb() ? "This page" : "This slide";
+        b.title = isWeb() ? "Messages asked on this page" : "Messages asked on this slide";
+      } else {
+        b.title = isWeb() ? "The whole conversation about this web book" : "The whole conversation about this deck";
+      }
+    }
+    $(".others-label").textContent = isWeb() ? "Also asked on pages:" : "Also asked on slides:";
     $("#head-actions").hidden = !state.hasDeck;
     const others = viewAll ? [] : (state.pages || []).filter((p) => p !== state.page);
     const box = $("#others");
     const list = $("#others-list");
-    const sig = others.join(",");
+    const sig = (isWeb() ? "w" : "s") + others.map((p) => p + (isWeb() ? ":" + pageName(p) : "")).join(",");
     if (list.dataset.sig !== sig) {
       list.dataset.sig = sig;
       list.textContent = "";
       for (const p of others) {
         const b = document.createElement("button");
         b.className = "pg";
-        b.textContent = p;
-        b.title = "Go to slide " + p;
+        b.textContent = isWeb() ? clip(pageName(p), 28) : p;
+        b.title = isWeb() ? "Go back to “" + pageName(p) + "”" : "Go to slide " + p;
         b.onclick = () => post({ type: "gotoSlide", page: p });
         list.appendChild(b);
       }
@@ -153,6 +185,10 @@
     box.hidden = !others.length;
     const note = busyNote();
     const att = $("#attach");
+    att.title = isWeb() ? "A page’s text goes with your first question on it, and a picture of the screen whenever the part on screen changed"
+      : "The current slide image and text are sent with your first question on this slide";
+    $("#btn-area").title = isWeb() ? "Drag a box over part of the page (or hold ⌥ and drag on the page; ⌘⇧A)"
+      : "Drag a box over part of the slide (or hold ⌥ and drag on the slide; ⌘⇧A)";
     att.className = note ? "busynote" : "";
     att.textContent = !state.hasDeck ? "" : note ? note : attachLine();
     for (const b of document.querySelectorAll("#providers button")) {
@@ -176,7 +212,7 @@
     const ab = $("#areabox");
     if (state.area) {
       $("#area-img").src = state.area.thumb;
-      $("#area-label").textContent = "Area of slide " + state.area.page;
+      $("#area-label").textContent = isWeb() ? "Area of this page" : "Area of slide " + state.area.page;
       ab.hidden = false;
     } else ab.hidden = true;
     renderAttachments();
@@ -184,7 +220,8 @@
 
   /// "Slide 4 goes with your question", "Slide 4, 1 screenshot and the walkthrough passage go with your question".
   function attachLine() {
-    const parts = [state.area ? "The selected area of slide " + state.area.page : "Slide " + state.page];
+    const parts = [state.area ? (isWeb() ? "The selected area of the page" : "The selected area of slide " + state.area.page)
+      : isWeb() ? "What’s on screen" : "Slide " + state.page];
     const n = pics().length, q = quoted();
     if (n) parts.push(n + (n === 1 ? " screenshot" : " screenshots"));
     if (q) parts.push(q.kind === "notes" ? "the notes passage" : q.kind === "reply" ? "the quoted part of the answer" : "the walkthrough passage");
@@ -196,7 +233,7 @@
     const n = pics().length;
     const q = quoted();
     const what = state.area ? "the selected area" : q ? (q.kind === "reply" ? "the quoted part" : "the passage")
-      : n > 1 ? "the screenshots" : n ? "the screenshot" : "this slide";
+      : n > 1 ? "the screenshots" : n ? "the screenshot" : isWeb() ? "this page" : "this slide";
     return "Ask about " + what + "…  (Enter to send, Shift+Enter for a new line)";
   }
 
@@ -420,7 +457,8 @@
       const button = el("button", "search-result");
       button.type = "button";
       button.appendChild(el("span", "search-result-title", result.deckTitle || "Lecture deck"));
-      const metadata = [result.courseName, Number.isInteger(result.page) && result.page > 0 ? "slide " + result.page : null,
+      const metadata = [result.courseName, typeof result.pageLabel === "string" && result.pageLabel ? result.pageLabel
+                        : Number.isInteger(result.page) && result.page > 0 ? "slide " + result.page : null,
                         result.role === "user" ? "You" : NAMES[result.provider] || "Assistant"];
       if (Number.isFinite(result.created)) {
         const date = new Date(result.created * 1000);
@@ -764,6 +802,13 @@
     d.className = "empty";
     if (!state.hasDeck) {
       d.innerHTML = "Open a lecture from the bar above the slides.";
+    } else if (isWeb() && !state.messages.length) {
+      d.innerHTML = "Ask anything about <b>the page you’re reading</b>.<br>" +
+        "This chat covers the whole web book: follow links, move between pages and keep asking; the assistants remember " +
+        "the conversation, get each page’s text and see what’s on screen. Use ✂︎ Select area to ask about part of the page; " +
+        "paste, drop or 📎 attach a screenshot to ask about that.";
+    } else if (isWeb()) {
+      d.innerHTML = "Nothing asked on this page yet in this chat.<br>Ask away: the assistants remember what you asked on the other pages.";
     } else if (!state.messages.length) {
       d.innerHTML = "Ask anything about <b>slide " + state.page + "</b>.<br>" +
         "This chat covers the whole deck: move between slides and keep asking; the assistants remember the conversation " +
@@ -921,8 +966,8 @@
       if (viewAll && m.page != null) {
         const tag = document.createElement("button");
         tag.className = "slidetag";
-        tag.textContent = "slide " + m.page;
-        tag.title = "Go to slide " + m.page;
+        tag.textContent = isWeb() ? clip(pageName(m.page), 40) : "slide " + m.page;
+        tag.title = isWeb() ? "Go back to “" + pageName(m.page) + "”" : "Go to slide " + m.page;
         tag.onclick = () => post({ type: "gotoSlide", page: m.page });
         el.appendChild(tag);
       }
@@ -986,7 +1031,7 @@
     if (m.text) {
       body.innerHTML = window.CLRender.renderMarkdown(m.text);
       enhance(body, m);
-      if (window.CLSlideLinks) window.CLSlideLinks.decorate(body, {
+      if (window.CLSlideLinks && !isWeb()) window.CLSlideLinks.decorate(body, {
         pageCount: state.pageCount, deckPath: state.deckPath, conversationID: state.conversation?.id,
       });
     }
@@ -1049,7 +1094,7 @@
     for (let j = i - 1; j >= 0; j--) if (state.messages[j].role === "user") { q = state.messages[j]; break; }
     if (!q) return;
     if (q.areaThumb && !state.area) {
-      showNote({ text: "That question was about an area of the slide: select it again (✂︎ Select area), then press Ask again.", error: false });
+      showNote({ text: "That question was about an area of the " + (isWeb() ? "page" : "slide") + ": select it again (✂︎ Select area), then press Ask again.", error: false });
       return;
     }
     if (preparing()) {
@@ -1106,7 +1151,7 @@
       // A question's pictures and quote are fixed once it is sent, so the messages' ids, status and text say whether
       // anything needs redrawing. The pictures and quote waiting in the chat box are redrawn by renderHeader.
       const sig = (x) => (x.conversation ? x.conversation.id : "") + "|" + (x.hasDeck ? x.deckPath : "") + "|" + x.pageCount + "|"
-        + (x.hasDeck ? x.deckTitle : "") + "|"
+        + (x.hasDeck ? x.deckTitle : "") + "|" + (x.kind || "") + "|" + JSON.stringify(x.pageLabels || {}) + "|"
         + (x.messages || []).map((m) => m.id + ":" + m.status + ":" + (m.text || "").length).join(",");
       const same = viewAll && (s.messages || []).length > 0 && sig(state) === sig(s);
       state = Object.assign({}, state, s);

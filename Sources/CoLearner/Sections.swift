@@ -14,28 +14,59 @@ struct LibrarySection: Codable, Hashable, Identifiable {
     var collapsed: Bool?
 }
 
-/// A folder or PDF linked to a section.
+/// A folder, PDF or web page linked to a section.
 struct LinkedItem: Codable, Hashable, Identifiable {
-    enum Kind: String, Codable { case folder, file }
+    enum Kind: String, Codable { case folder, file, web }
     var id: String
     var kind: Kind
-    /// Where it was last seen.
+    /// Where it was last seen; for a web page, its address.
     var path: String
     /// Finds it again after it is renamed or moved in Finder.
     var bookmark: Data?
     /// Linked folders start open on the page.
     var collapsed: Bool?
+    /// A web page's name on the page (its title once it has been open, or what it was renamed to).
+    var title: String?
 
-    init(id: String = UUID().uuidString, kind: Kind, path: String, bookmark: Data? = nil) {
+    init(id: String = UUID().uuidString, kind: Kind, path: String, bookmark: Data? = nil, title: String? = nil) {
         self.id = id
         self.kind = kind
         self.path = path
         self.bookmark = bookmark
+        self.title = title
     }
 
     /// A new link, with a bookmark to find it again after a rename or move.
     static func make(path: String, kind: Kind) -> LinkedItem {
         LinkedItem(kind: kind, path: path, bookmark: FileTracker.bookmark(for: path))
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, kind, path, bookmark, collapsed, title }
+
+    /// A web page is written as a "file" with its address: 0.2, which knows only folders and PDFs, then still reads
+    /// sections.json (the link shows there as a file it can't find) instead of setting the file aside.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        path = try c.decode(String.self, forKey: .path)
+        let raw = try c.decode(String.self, forKey: .kind)
+        guard let k = Kind(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "unknown kind \(raw)")
+        }
+        kind = k == .file && WebAddress.isWeb(path) ? .web : k
+        bookmark = try c.decodeIfPresent(Data.self, forKey: .bookmark)
+        collapsed = try c.decodeIfPresent(Bool.self, forKey: .collapsed)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind == .web ? Kind.file.rawValue : kind.rawValue, forKey: .kind)
+        try c.encode(path, forKey: .path)
+        try c.encodeIfPresent(bookmark, forKey: .bookmark)
+        try c.encodeIfPresent(collapsed, forKey: .collapsed)
+        try c.encodeIfPresent(title, forKey: .title)
     }
 }
 
@@ -143,6 +174,25 @@ extension SectionsFile {
         sections[s].items.removeAll { $0.id == item }
     }
 
+    /// Renames a web page linked to a section (on the page only; "" goes back to its address).
+    mutating func rename(webItem item: String, in section: String, to name: String) {
+        guard let s = index(of: section), let i = sections[s].items.firstIndex(where: { $0.id == item && $0.kind == .web }) else { return }
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        sections[s].items[i].title = n.isEmpty ? nil : n
+    }
+
+    /// Web links to `url` that have no name yet take the page's title.
+    mutating func name(webLink url: String, _ title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        for s in sections.indices {
+            for i in sections[s].items.indices where sections[s].items[i].kind == .web && sections[s].items[i].path == url
+                && sections[s].items[i].title == nil {
+                sections[s].items[i].title = String(t.prefix(160))
+            }
+        }
+    }
+
     /// True if `path` lies inside one of the section's linked folders (listed there or hidden).
     func contains(_ path: String, in section: LibrarySection) -> Bool {
         section.items.contains { $0.kind == .folder && path.hasPrefix($0.path + "/") }
@@ -220,22 +270,27 @@ extension SectionsFile {
 
 // MARK: - what the sections show (read from disk)
 
-/// A folder or PDF on the lecture page.
+/// A folder, PDF or web page on the lecture page.
 struct LibraryNode: Hashable, Identifiable {
     var path: String
     var isFolder: Bool
     /// A folder's PDFs and the folders below it that hold PDFs: folders first, then files, in Finder's name order.
     var children: [LibraryNode] = []
+    /// A web page (`path` is its address).
+    var isWeb = false
+    /// A web page's name, when it has one.
+    var title: String?
     var id: String { path }
 
-    /// The real name: a folder's name, a PDF's file name without ".pdf".
+    /// The real name: a folder's name, a PDF's file name without ".pdf"; a web page's title, else its address.
     var name: String {
+        if isWeb { return title ?? WebAddress.label(path) }
         let u = URL(fileURLWithPath: path)
         return isFolder ? u.lastPathComponent : u.deletingPathExtension().lastPathComponent
     }
 
     /// Every PDF at or below this node.
-    var files: [String] { isFolder ? children.flatMap(\.files) : [path] }
+    var files: [String] { isWeb ? [] : isFolder ? children.flatMap(\.files) : [path] }
 }
 
 /// A linked item as the page shows it; `node` is nil while the folder or PDF can't be found.
@@ -278,6 +333,8 @@ enum LibraryScanner {
                                                                  budget: &budget, keepEmpty: true, denied: &denied))
                 case .file:
                     return LinkContents(item: item, node: isPDF(item.path) ? LibraryNode(path: item.path, isFolder: false) : nil)
+                case .web:
+                    return LinkContents(item: item, node: LibraryNode(path: item.path, isFolder: false, isWeb: true, title: item.title))
                 }
             }
             // Hidden entries that are still inside one of the section's linked folders.

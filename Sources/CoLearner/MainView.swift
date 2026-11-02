@@ -15,10 +15,16 @@ struct MainView: View {
             VStack(spacing: 0) {
                 DeckBar()
                 Divider()
-                if model.document != nil {
+                if let web = model.web {
+                    WebBookPane(web: web, selecting: model.selectingArea,
+                                isSelecting: { [weak model] in model?.selectingArea ?? false },
+                                onArea: { [weak model] r, layer, view in model?.finishWebAreaSelection(r, on: layer, over: view) })
+                } else if model.document != nil {
                     SlideView()
-                    Divider()
-                    ThumbnailStrip()
+                    if !model.thumbnailsHidden {
+                        Divider()
+                        ThumbnailStrip()
+                    }
                 } else {
                     WelcomeView()
                 }
@@ -31,7 +37,15 @@ struct MainView: View {
         .frame(minWidth: docked ? 860 : 480, minHeight: 560)
         .background(WindowReader { [weak model] w in model?.mainWindow = w })
         .onAppear { model.mainWindowAppeared() }
-        .navigationTitle(model.deck.map { "\($0.title) — slide \(model.page)/\(model.pageCount)" } ?? "Co-learner")
+        .navigationTitle(windowTitle)
+    }
+
+    /// "Ch01 - Functions — slide 3/40"; in a web tab, the page and the book ("Linear Transformations — Interactive Linear Algebra").
+    private var windowTitle: String {
+        guard let d = model.deck else { return "Co-learner" }
+        guard d.isWeb else { return "\(d.title) — slide \(model.page)/\(model.pageCount)" }
+        let page = model.webPageTitle ?? d.title
+        return page == d.title ? page : page + " — " + d.title
     }
 }
 
@@ -66,6 +80,7 @@ struct DeckBar: View {
                 }
                 Divider()
                 Button("Open a PDF…") { model.openPDFPanel() }
+                Button("Open a Web Page…") { model.openWebPagePanel() }
                 Button("Reload library") { model.reloadLibrary() }
             } label: {
                 Label("Lectures", systemImage: "books.vertical")
@@ -111,6 +126,13 @@ struct DeckBar: View {
                         .buttonStyle(IconButtonStyle())
                         .disabled(model.page >= model.pageCount)
                         .help("Next slide (⌘])")
+                    Button { model.toggleThumbnails() } label: {
+                        Image(systemName: model.thumbnailsHidden ? "rectangle" : "rectangle.bottomthird.inset.filled")
+                            .font(.system(size: 13))
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .accessibilityLabel(model.thumbnailsHidden ? "Show thumbnails" : "Hide thumbnails")
+                    .help(model.thumbnailsHidden ? "Show the slide thumbnails (⌥⌘T)" : "Hide the slide thumbnails for a bigger page (⌥⌘T)")
                 }
             }
 
@@ -164,7 +186,10 @@ private struct DeckTab: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(courseTag + " " + deck.title)
+            if deck.isWeb {
+                Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Text(deck.isWeb ? model.webTabTitle(deck) : courseTag + " " + deck.title)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .font(.callout.weight(selected ? .semibold : .regular))
@@ -232,7 +257,7 @@ struct WelcomeView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Co-learner").font(.largeTitle.bold())
-                Text("Pick a lecture. Ask about the slide you're on; the slide goes with your question.")
+                Text("Pick a lecture or a web page. Ask about the slide or page you're on; it goes with your question.")
                     .foregroundStyle(.secondary)
                 if model.folderAccessDenied {
                     Text("Co-learner can't read some linked folders. Allow it in System Settings › Privacy & Security › Files & Folders (Co-learner), then press Refresh.")
@@ -243,6 +268,8 @@ struct WelcomeView: View {
                         .help("Add a section; link folders or PDFs to it now or later")
                     Button { model.openPDFPanel() } label: { Label("Open a PDF…", systemImage: "doc") }
                         .help("Open any PDF (it goes into Other PDFs unless a section lists it)")
+                    Button { model.openWebPagePanel() } label: { Label("Open a Web Page…", systemImage: "globe") }
+                        .help("Open a web page or online book in a tab, with the chat next to it (it goes into Web Pages unless a section links it)")
                     Button { model.reloadLibrary() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .help("Read the linked folders again (Co-learner also notices changes by itself)")
                 }

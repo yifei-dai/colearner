@@ -90,8 +90,10 @@ struct Conversation: Codable, Identifiable, Sendable {
     var codexSession: String?
     /// provider -> ids of the messages that provider has been shown (its own session, or quoted to it).
     var seenBy: [String: [String]]?
-    /// provider -> slides whose image that provider's session has been shown.
+    /// provider -> slides whose image that provider's session has been shown (in a web tab: pages whose text it got).
     var seenSlides: [String: [Int]]?
+    /// Web tabs: provider -> the part of the page in the last picture of the screen that provider got (WebSnapshot.viewKey).
+    var seenViews: [String: String]?
     /// The source version used to start each provider's session. Missing in older chat files.
     var contextRevisions: [String: String]?
     /// Migrated from the per-slide chats of v0.1–v0.1.4 (no sessions to resume).
@@ -103,6 +105,7 @@ struct Conversation: Codable, Identifiable, Sendable {
         if s == nil {   // a fresh session has seen nothing
             seenBy?[p.rawValue] = nil
             seenSlides?[p.rawValue] = nil
+            seenViews?[p.rawValue] = nil
         }
     }
     /// The same sources under a new stamp: keep the session, take the stamp.

@@ -340,7 +340,7 @@ struct WalkthroughPane: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Link or unlink walkthrough pages and notes for this deck")
-                .disabled(model.deck == nil)
+                .disabled(model.deck == nil || model.deck?.isWeb == true)
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
@@ -351,9 +351,12 @@ struct WalkthroughPane: View {
             if pages.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "book.pages").font(.largeTitle).foregroundStyle(.secondary)
-                    Text(model.deck == nil ? "Open a lecture first." : "No walkthrough is linked to \(model.deck!.title) yet.")
+                    Text(model.deck == nil ? "Open a lecture first."
+                         : model.deck!.isWeb ? "Walkthroughs go with lecture PDFs. Ask about this web page in the Chat tab."
+                         : "No walkthrough is linked to \(model.deck!.title) yet.")
                         .foregroundStyle(.secondary)
-                    if model.deck != nil {
+                        .multilineTextAlignment(.center)
+                    if let d = model.deck, !d.isWeb {
                         Button("Link a walkthrough page or notes PDF…") { model.linkStudyPagePanel() }
                         ForEach(model.unlinkedStudyPages) { p in
                             Button("Link “\(p.title)” again") { model.relinkStudyPage(p) }
