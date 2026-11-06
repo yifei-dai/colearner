@@ -206,7 +206,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var webTitles: [String: String] = [:]
     /// The chat header's height (points, its bottom line included), as the chat page reports it: a web tab's bar takes
     /// it, so the lines under both meet.
-    @Published var chatHeadHeight: CGFloat = 44
+    @Published var chatHeadHeight: CGFloat = 41
     /// The web tab on screen (nil for a PDF and on the lecture page).
     var web: WebBookController? { deck.flatMap { $0.isWeb ? webTabs[$0.path] : nil } }
 
@@ -456,7 +456,7 @@ final class AppModel: ObservableObject {
         newTab = keep
     }
 
-    /// Open a lecture from the Lectures menu or the lecture list. From a New Tab, it takes that tab's place.
+    /// Open a lecture from the Shortcuts menu or the lecture list. From a New Tab, it takes that tab's place.
     @discardableResult
     func open(_ d: Deck) -> Bool {
         if d.isWeb { return openWebDeck(d, start: nil) }
@@ -541,7 +541,7 @@ final class AppModel: ObservableObject {
 
     // MARK: web tabs
 
-    /// Open a Web Page… (the Lectures menu, the lecture page, File ›): the page opens in its book's tab. A book no
+    /// Open a Web Page… (the Shortcuts menu, the lecture page, File ›): the page opens in its book's tab. A book no
     /// section links yet goes into "Web Pages" (made again if it was removed), as PDFs opened by hand go into Other PDFs.
     func openWebPagePanel() {
         selectingArea = false

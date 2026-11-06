@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import CoLearner
 
-/// Screenshots and walkthrough quotes in the shipped chat page: the composer, the status line, quick buttons, paste,
+/// Screenshots and walkthrough quotes in the shipped chat page: the composer, its header, quick buttons, paste,
 /// drop and the question bubbles. The app side is played by the test (setThread / setAttachments and the posts).
 @Suite(.serialized)
 @MainActor
@@ -162,29 +162,29 @@ struct ChatAttachmentUITests {
         #expect(try await flag("document.querySelector('.chip[data-action=explain]').disabled && document.querySelector('.chip[data-action=visualize]').disabled", in: web))
     }
 
-    // MARK: status line, quick buttons and sending
+    // MARK: quick buttons and sending
 
-    @Test func statusLineQuickButtonsAndPlaceholderFollowPrecedence() async throws {
+    @Test func quickButtonsAndPlaceholderFollowPrecedence() async throws {
         let web = ChatWebFixture()
         defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
         try await web.load()
         let area: [String: Any] = ["page": 4, "thumb": picture()]
         let one = [image("a", "one.png")], two = [image("a", "one.png"), image("b", "two.png")]
-        // (images, quote, area) → status line, explain, visualize, placeholder
-        let cases: [([[String: Any]], Any, Any, String, String, String, String)] = [
-            ([], NSNull(), NSNull(), "Slide 4 goes with your question", "Explain this slide", "Visualize this slide", "this slide"),
-            (one, NSNull(), NSNull(), "Slide 4 and 1 screenshot go with your question", "Explain the screenshot", "Visualize the screenshot", "the screenshot"),
-            (two, NSNull(), NSNull(), "Slide 4 and 2 screenshots go with your question", "Explain the screenshots", "Visualize the screenshots", "the screenshots"),
-            ([], walkthroughQuote, NSNull(), "Slide 4 and the walkthrough passage go with your question", "Explain this passage", "Visualize this passage", "the passage"),
-            ([], notesQuote, NSNull(), "Slide 4 and the notes passage go with your question", "Explain this passage", "Visualize this passage", "the passage"),
-            (one, walkthroughQuote, NSNull(), "Slide 4, 1 screenshot and the walkthrough passage go with your question", "Explain this passage", "Visualize this passage", "the passage"),
-            ([], NSNull(), area, "The selected area of slide 4 goes with your next question", "Explain this area", "Visualize this area", "the selected area"),
-            (one, NSNull(), area, "The selected area of slide 4 and 1 screenshot go with your next question", "Explain this area", "Visualize this area", "the selected area"),
-            (two, walkthroughQuote, area, "The selected area of slide 4, 2 screenshots and the walkthrough passage go with your next question", "Explain this area", "Visualize this area", "the selected area"),
+        // (images, quote, area) → explain, visualize, placeholder (what goes with a question shows above the box and in
+        // the placeholder; there is no status line for it)
+        let cases: [([[String: Any]], Any, Any, String, String, String)] = [
+            ([], NSNull(), NSNull(), "Explain this slide", "Visualize this slide", "this slide"),
+            (one, NSNull(), NSNull(), "Explain the screenshot", "Visualize the screenshot", "the screenshot"),
+            (two, NSNull(), NSNull(), "Explain the screenshots", "Visualize the screenshots", "the screenshots"),
+            ([], walkthroughQuote, NSNull(), "Explain this passage", "Visualize this passage", "the passage"),
+            ([], notesQuote, NSNull(), "Explain this passage", "Visualize this passage", "the passage"),
+            (one, walkthroughQuote, NSNull(), "Explain this passage", "Visualize this passage", "the passage"),
+            ([], NSNull(), area, "Explain this area", "Visualize this area", "the selected area"),
+            (one, NSNull(), area, "Explain this area", "Visualize this area", "the selected area"),
+            (two, walkthroughQuote, area, "Explain this area", "Visualize this area", "the selected area"),
         ]
-        for (images, quote, selected, status, explain, visualize, about) in cases {
+        for (images, quote, selected, explain, visualize, about) in cases {
             try await web.call("setThread", thread(images: images, quote: quote, area: selected))
-            #expect(try await text("#attach", in: web) == status)
             #expect(try await text(".chip[data-action=explain]", in: web) == explain)
             #expect(try await text(".chip[data-action=visualize]", in: web) == visualize)
             #expect(try await web.evaluate("document.querySelector('#input').placeholder") as? String == "Ask about " + about + Self.hint)
@@ -686,7 +686,6 @@ struct ChatAttachmentUITests {
         #expect(try await text("#note", in: web) == "Couldn’t read “IMG_2041.HEIC” as an image.")
         #expect(try await flag("document.querySelector('#note').classList.contains('error')", in: web))
         #expect(try await web.evaluate("document.querySelector('#note').getAttribute('role')") as? String == "status")
-        #expect(try await text("#attach", in: web) == "Slide 4 goes with your question")   // the status line stays
         #expect(try await web.evaluate("noteTimers.map(t => t.ms)") as? [Int] == [5000])
         _ = try await web.evaluate("noteTimers[0].fn(); null;")
         #expect(try await text("#note", in: web) == "")
@@ -747,10 +746,10 @@ struct ChatAttachmentUITests {
         }
     }
 
-    /// Stop and the status line on screen, and the chat box's own rows whole: the first (the chips) not cut off at the top.
+    /// The row with Stop on screen, and the chat box's own rows whole: the first (the chips) not cut off at the top.
     private let chatBoxWhole = """
         (() => { const r = (s) => document.querySelector(s).getBoundingClientRect(), c = r('#composer');
-                 return r('#quick').top >= c.top + 8.5 && ['#btn-send', '#usage'].every(s => { const b = r(s);
+                 return r('#quick').top >= c.top + 8.5 && ['#btn-send', '#providers'].every(s => { const b = r(s);
                    return b.height > 0 && b.top >= 0 && b.bottom <= innerHeight; }); })()
         """
 
@@ -783,7 +782,7 @@ struct ChatAttachmentUITests {
             try await web.waitFor("window.innerWidth === \(Int(width)) && window.innerHeight === \(Int(height))")
             let size = "\(Int(width))×\(Int(height))"
             #expect(try await text("#btn-send", in: web) == "Stop")
-            // Stop, the status line and the rest of the chat box stay on screen, the conversation keeps a quarter of the window,
+            // Stop and the rest of the chat box stay on screen, the conversation keeps a quarter of the window,
             #expect(try await flag(chatBoxWhole, in: web), "chat box cut off at \(size)")
             #expect(try await flag("document.querySelector('#log').getBoundingClientRect().height >= innerHeight / 4 - 0.5", in: web),
                     "conversation squeezed at \(size)")
@@ -857,6 +856,93 @@ struct ChatAttachmentUITests {
         _ = try await web.evaluate("document.querySelector('#input').value = ''; null;")
         try await web.call("setAttachments", ["images": [], "quote": NSNull()])
         #expect(try await flag("document.querySelector('#log').style.minHeight === ''", in: web))
+    }
+
+    // MARK: the header and the bar
+
+    /// The header has no deck title (the tab and window title show it): its view toggle and buttons, one height, sit
+    /// together on the left and the plan usage at the right, as whole as the row allows. The chat box ends with the
+    /// bar (no status line); an answer running on another slide is named next to Stop or, where that has no room, under it.
+    @Test func theHeaderHoldsTheButtonsAndThePlanUsageAndTheBarNamesAnAnswerElsewhere() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await shortChat(web)
+        try await web.call("setUsage", [
+            "claude": ["windows": [["label": "5h", "percent": 1], ["label": "week", "percent": 0]], "updated": 0],
+            "codex": ["windows": [["label": "5h", "percent": 0], ["label": "week", "percent": 7]], "updated": 0]])
+        try await web.call("setThread", thread())
+        #expect(try await flag("!document.querySelector('#where, #status, #attach')", in: web))
+        #expect(try await flag("""
+            (() => { const b = ['#viewseg', '#btn-history', '#btn-new', '#btn-search'].map(s => document.querySelector(s).getBoundingClientRect());
+                     return b[0].left < 14 && b.every((r, i) => Math.abs(r.height - b[0].height) < 0.5 && Math.abs(r.top - b[0].top) < 0.5
+                       && (i === 0 || r.left - b[i - 1].right < 8)); })()
+            """, in: web), "the header's buttons differ in height or stand apart")
+        #expect(try await text("#log .empty", in: web) == "Ask anything about slide 4.")
+        #expect((try await web.evaluate("document.querySelector('#log .empty').title") as? String)?.isEmpty == false)
+        #expect(try await web.evaluate("document.querySelector('#usage').title") as? String
+                == "Plan usage: Claude 5h 1% · week 0%, ChatGPT 5h 0% · week 7%. Click for details")
+        #expect(try await flag("(c => c.bottom - document.querySelector('#bar').getBoundingClientRect().bottom < 12)(document.querySelector('#composer').getBoundingClientRect())", in: web),
+                "something under the bar")
+
+        // Names, then dots for them ("wk" for "week"), then no windows' names; a narrow chat puts the whole line on a row of
+        // its own.
+        let usage = """
+            (() => { const u = document.querySelector('#usage'), r = u.getBoundingClientRect(), s = document.querySelector('#btn-search').getBoundingClientRect(),
+                       h = document.querySelector('#head').getBoundingClientRect();
+                     return [u.dataset.form || 'whole', r.top < s.bottom ? 'beside' : 'below', r.right <= h.right - 11.5,
+                             Math.round(h.height)].join(' '); })()
+            """
+        // (588 px: a 1512 pt wide window at 3 : 2)
+        for (width, expected) in [(820.0, "whole beside true 41"), (640.0, "short beside true 41"), (588.0, "short beside true 41"),
+                                  (530.0, "shorter beside true 41"), (420.0, "whole below true 71")] {
+            web.webView.frame.size = NSSize(width: width, height: 700)
+            try await web.waitFor("window.innerWidth === \(Int(width))")
+            try await Task.sleep(for: .milliseconds(80))
+            #expect(try await web.evaluate(usage) as? String == expected, "usage at \(Int(width)) px")
+            #expect(try await flag("document.documentElement.scrollWidth <= window.innerWidth", in: web))
+            if width == 588 { try await snapshot(web, "colearner-header-588.png") }
+        }
+        // Its card opens under the header.
+        web.webView.frame.size = NSSize(width: 640, height: 700)
+        try await web.waitFor("window.innerWidth === 640")
+        try await Task.sleep(for: .milliseconds(80))
+        try await snapshot(web, "colearner-header-640.png")
+        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
+        try await web.waitFor("!document.querySelector('.pop').hidden")
+        #expect(try await flag("document.querySelector('.pop').getBoundingClientRect().top >= document.querySelector('#usage').getBoundingClientRect().bottom", in: web))
+        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
+
+        // An answer on slide 7, not on screen: next to Stop; with both model buttons in the bar, on a line under it.
+        let question: [String: Any] = ["id": "q", "role": "user", "page": 7, "text": "Why?", "status": "done"]
+        let claude: [String: Any] = ["id": "a", "role": "assistant", "provider": "claude", "page": 7, "text": "So far", "status": "streaming"]
+        let codex: [String: Any] = ["id": "b", "role": "assistant", "provider": "codex", "page": 7, "text": "", "status": "streaming"]
+        web.webView.frame.size = NSSize(width: 720, height: 700)
+        try await web.waitFor("window.innerWidth === 720")
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(try await web.evaluate(usage) as? String == "whole beside true 41", "usage at 720 px after the card")
+        var t = thread(messages: [question, claude])
+        try await web.call("setThread", t)
+        #expect(try await text("#btn-send", in: web) == "Stop")
+        #expect(try await text("#away", in: web) == "Claude is answering on slide 7")
+        #expect(try await flag("(a => !a.classList.contains('below') && a.scrollWidth <= a.clientWidth + 1)(document.querySelector('#away'))", in: web))
+        t["provider"] = "both"
+        t["messages"] = [question, claude, codex]
+        try await web.call("setThread", t)
+        #expect(try await text("#away", in: web) == "Claude and ChatGPT are answering on slide 7")
+        #expect(try await flag("(a => a.classList.contains('below') && a.scrollWidth <= a.clientWidth + 1)(document.querySelector('#away'))", in: web))
+        #expect(try await flag("document.querySelector('#away').getBoundingClientRect().top >= document.querySelector('#btn-send').getBoundingClientRect().bottom", in: web))
+        // Once the answers are on screen (All), the note goes.
+        _ = try await web.evaluate("document.querySelector('#viewseg [data-v=all]').click(); null;")
+        try await web.waitFor("document.querySelector('#away').textContent === ''")
+        _ = try await web.evaluate("document.querySelector('#viewseg [data-v=slide]').click(); null;")
+        try await snapshot(web, "colearner-header-and-bar-720.png")
+    }
+
+    /// With COLEARNER_TEST_SNAPSHOTS set, a picture of the page: in that folder when it names one, else in /tmp.
+    private func snapshot(_ web: ChatWebFixture, _ name: String) async throws {
+        guard let value = ProcessInfo.processInfo.environment["COLEARNER_TEST_SNAPSHOTS"] else { return }
+        let folder = value.hasPrefix("/") ? URL(fileURLWithPath: value) : URL(fileURLWithPath: "/tmp")
+        try await web.snapshot(to: folder.appendingPathComponent(name))
     }
 }
 

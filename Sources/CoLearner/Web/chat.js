@@ -142,19 +142,21 @@
     const who = asking();
     return state.messages.some((m) => m.role === "assistant" && m.status === "streaming" && who.includes(m.provider));
   }
-  /// "Claude is answering on slide 7" when that answer isn't on screen.
+  /// "Claude is answering on slide 7" ("Claude and ChatGPT are answering on slide 7") when that answer isn't on screen.
   function busyNote() {
     const away = state.messages.filter((m) => m.role === "assistant" && m.status === "streaming" && !visible(m));
-    return away.map((m) => NAMES[m.provider] + " is answering on " + (isWeb() ? "“" + clip(pageName(m.page), 40) + "”" : "slide " + m.page)).join(" · ");
+    const byPage = new Map();
+    for (const m of away) byPage.set(m.page, (byPage.get(m.page) || new Set()).add(NAMES[m.provider]));
+    return Array.from(byPage, ([page, who]) => Array.from(who).join(" and ") + (who.size > 1 ? " are" : " is") + " answering on "
+      + (isWeb() ? "“" + clip(pageName(page), 40) + "”" : "slide " + page)).join(" · ");
   }
 
+  let headSig = null;
   function renderHeader() {
-    $("#where-deck").textContent = state.hasDeck ? state.deckTitle : "No slides open";
-    const pageTitle = isWeb() ? String(state.pageTitle || "") : "";
-    $("#where-slide").textContent = !state.hasDeck ? "" : isWeb() ? (pageTitle && pageTitle !== state.deckTitle ? pageTitle : "")
-      : "slide " + state.page + " / " + state.pageCount;
-    $("#where-slide").title = isWeb() ? pageTitle : "";
-    $("#where").classList.toggle("web", isWeb());   // the book's name first; the page's title gives way
+    // The deck and slide are on the tab and in the window title: the header has only its buttons and the plan usage,
+    // which gets the room the buttons leave (measured again when they change).
+    const hs = (state.hasDeck ? "d" : "-") + (isWeb() ? "w" : "s");
+    if (hs !== headSig) { headSig = hs; fitUsageSoon(); }
     for (const b of document.querySelectorAll("#viewseg button")) {
       b.classList.toggle("on", (b.dataset.v === "all") === viewAll);
       if (b.dataset.v === "slide") {
@@ -183,14 +185,13 @@
       }
     }
     box.hidden = !others.length;
-    const note = busyNote();
-    const att = $("#attach");
-    att.title = isWeb() ? "A page’s text goes with your first question on it, and a picture of the screen whenever the part on screen changed"
-      : "The current slide image and text are sent with your first question on this slide";
+    // An answer running where it isn't on screen is named next to Stop (what goes with a question is in the box's
+    // placeholder and above it, so there is no line for that).
+    const note = state.hasDeck ? busyNote() : "";
+    const away = $("#away");
+    if (away.textContent !== note) { away.textContent = note; away.title = note; }
     $("#btn-area").title = isWeb() ? "Drag a box over part of the page (or hold ⌥ and drag on the page; ⌘⇧A)"
       : "Drag a box over part of the slide (or hold ⌥ and drag on the slide; ⌘⇧A)";
-    att.className = note ? "busynote" : "";
-    att.textContent = !state.hasDeck ? "" : note ? note : attachLine();
     for (const b of document.querySelectorAll("#providers button")) {
       const on = b.dataset.p === state.provider;
       b.classList.toggle("on", on);
@@ -216,18 +217,15 @@
       ab.hidden = false;
     } else ab.hidden = true;
     renderAttachments();
+    fitAway();   // once the model buttons and Send are as they will be
   }
 
-  /// "Slide 4 goes with your question", "Slide 4, 1 screenshot and the walkthrough passage go with your question".
-  function attachLine() {
-    const parts = [state.area ? (isWeb() ? "The selected area of the page" : "The selected area of slide " + state.area.page)
-      : isWeb() ? "What’s on screen" : "Slide " + state.page];
-    const n = pics().length, q = quoted();
-    if (n) parts.push(n + (n === 1 ? " screenshot" : " screenshots"));
-    if (q) parts.push(q.kind === "notes" ? "the notes passage" : q.kind === "reply" ? "the quoted part of the answer" : "the walkthrough passage");
-    const last = parts.pop();
-    return (parts.length ? parts.join(", ") + " and " + last + " go" : last + " goes")
-      + (state.area ? " with your next question" : " with your question");
+  /// The note about an answer running elsewhere: next to Stop where the bar has room for it, else on a line of its own
+  /// under the bar (both model buttons in a narrow chat).
+  function fitAway() {
+    const away = $("#away");
+    away.classList.remove("below");
+    if (away.textContent && away.scrollWidth > away.clientWidth + 1) away.classList.add("below");
   }
   function placeholder() {
     const n = pics().length;
@@ -299,7 +297,7 @@
     fitLog();
   }
   /// While something waits it gives way first and scrolls (chat.css): the conversation keeps a quarter of the window, but
-  /// not at the cost of the chat box's own rows (chips, area, question box, buttons, status line); where both don't fit,
+  /// not at the cost of the chat box's own rows (chips, area, question box, buttons, a note); where both don't fit,
   /// it gets what the rows leave. A window under 520 px has no room for a quarter and what waits: there the conversation
   /// gets what the whole chat box leaves, as before.
   function fitLog() {
@@ -307,7 +305,7 @@
     let min = 0;
     if (!box.hidden && innerHeight >= 520) {
       const c = getComputedStyle(composer);
-      const rows = $("#status").getBoundingClientRect().bottom - $("#quick").getBoundingClientRect().top - box.getBoundingClientRect().height
+      const rows = $("#note").getBoundingClientRect().bottom - $("#quick").getBoundingClientRect().top - box.getBoundingClientRect().height
         + parseFloat(c.paddingTop) + parseFloat(c.paddingBottom) + parseFloat(c.borderTopWidth);
       const room = composer.getBoundingClientRect().bottom - log.getBoundingClientRect().top;
       min = Math.max(0, Math.min(innerHeight / 4, Math.floor(room - rows)));
@@ -323,14 +321,40 @@
     fitQueued = true;
     requestAnimationFrame(() => { fitQueued = false; fitLog(); });
   });
-  for (const s of ["#head", "#others", "#quick", "#areabox", "#inputwrap", "#bar", "#note", "#status"]) rowsObserver.observe($(s));
+  for (const s of ["#head", "#others", "#quick", "#areabox", "#inputwrap", "#bar", "#note"]) rowsObserver.observe($(s));
   // The header's height (its bottom line included), so the bar above a web page next to the chat ends on the same line.
   let headHeight = 0;
   new ResizeObserver(() => {
+    fitUsageSoon();
     const h = Math.round($("#head").getBoundingClientRect().height * 2) / 2;
     if (h > 0 && h !== headHeight) { headHeight = h; post({ type: "headHeight", height: h }); }
   }).observe($("#head"));
-  window.addEventListener("resize", fitLog);
+  window.addEventListener("resize", () => { fitAway(); fitLog(); fitUsageSoon(); });
+
+  /// The plan usage shares the header's row with the buttons. Where the whole line doesn't fit there, the assistants'
+  /// names give way to their dots ("week" to "wk"), then the windows' names go too; only if even that doesn't fit does
+  /// it go to a row of its own, as whole as that row allows.
+  function fitUsage() {
+    const box = $("#usage"), search = $("#btn-search"), head = $("#head");
+    const forms = ["", "short", "shorter"];
+    const wrapped = () => box.getBoundingClientRect().top >= search.getBoundingClientRect().bottom - 1;
+    const fits = () => box.getBoundingClientRect().right <= head.getBoundingClientRect().right - parseFloat(getComputedStyle(head).paddingRight) + 0.5;
+    for (const form of forms) {
+      box.dataset.form = form;
+      if (!wrapped()) return;
+    }
+    for (const form of forms) {
+      box.dataset.form = form;
+      if (fits()) return;
+    }
+  }
+  // On the next frame: changing the line inside the header's resize observer would be a resize loop.
+  let usageFitQueued = false;
+  function fitUsageSoon() {
+    if (usageFitQueued) return;
+    usageFitQueued = true;
+    requestAnimationFrame(() => { usageFitQueued = false; fitUsage(); });
+  }
   /// Pictures the app is still decoding (dropped, pasted or chosen a moment ago).
   function preparing() { return Number.isInteger(state.processing) && state.processing > 0 ? state.processing : 0; }
   function removeButton(title, label, onclick, key) {
@@ -774,54 +798,68 @@
     }
   }
 
+  /// "Claude 5h 1% · week 0%  ChatGPT 5h 0% · week 7%" at the right of the header. Each assistant's dot (its color in
+  /// the model button) stands in for its name where the header is short (fitUsage); the tooltip always says all of it.
   function renderUsage() {
     const box = $("#usage");
     box.textContent = "";
-    let any = false;
+    const said = [];
     for (const p of ["claude", "codex"]) {
       const u = usage[p];
-      if (u && u.signedOut) {
-        any = true;
-        const span = el("span", "u");
-        span.appendChild(el("b", "", NAMES[p] + " "));
-        span.appendChild(el("span", "warn", "signed out"));
-        box.appendChild(span);
-        continue;
-      }
-      if (!u || !u.windows || !u.windows.length) continue;
-      any = true;
+      const signedOut = !!(u && u.signedOut);
+      if (!signedOut && (!u || !u.windows || !u.windows.length)) continue;
       const span = el("span", "u");
-      span.appendChild(el("b", "", NAMES[p] + " "));
-      u.windows.slice(0, 2).forEach((w, i) => {
-        const pct = Math.round(w.percent);
-        span.appendChild(el("span", pct >= 95 ? "hot" : pct >= 80 ? "warn" : "", (i ? " · " : "") + w.label + " " + pct + "%"));
-      });
+      span.append(el("span", "u-dot " + p), el("b", "u-who", NAMES[p] + " "));
+      if (signedOut) {
+        span.appendChild(el("span", "warn", "signed out"));
+        said.push(NAMES[p] + " signed out");
+      } else {
+        const parts = [];
+        u.windows.slice(0, 2).forEach((w, i) => {
+          const pct = Math.round(w.percent);
+          const s = el("span", pct >= 95 ? "hot" : pct >= 80 ? "warn" : "", i ? " · " : "");
+          // "week" is "wk" in the short line
+          const abbr = w.label === "week" ? "wk" : w.label;
+          s.appendChild(el("span", abbr === w.label ? "u-wl" : "u-wl u-long", w.label + " "));
+          if (abbr !== w.label) s.appendChild(el("span", "u-wl u-abbr", abbr + " "));
+          s.append(pct + "%");
+          span.appendChild(s);
+          parts.push(w.label + " " + pct + "%");
+        });
+        said.push(NAMES[p] + " " + parts.join(" · "));
+      }
       box.appendChild(span);
     }
-    if (!any) box.appendChild(el("span", "", "Usage"));
-    box.appendChild(el("span", "chev", "⌃"));
+    if (!said.length) box.appendChild(el("span", "", "Usage"));
+    box.appendChild(el("span", "chev", "⌄"));
+    box.title = "Plan usage" + (said.length ? ": " + said.join(", ") : "") + ". Click for details";
+    box.setAttribute("aria-label", box.title);   // the short line hides the names
     if (pop && pop.kind === "usage") renderUsagePop(box);
+    fitUsageSoon();
   }
 
+  /// One line; how the chat works is in its tooltip.
   function emptyState() {
     const d = document.createElement("div");
     d.className = "empty";
     if (!state.hasDeck) {
       d.innerHTML = "Open a lecture from the bar above the slides.";
     } else if (isWeb() && !state.messages.length) {
-      d.innerHTML = "Ask anything about <b>the page you’re reading</b>.<br>" +
-        "This chat covers the whole web book: follow links, move between pages and keep asking; the assistants remember " +
+      d.innerHTML = "Ask anything about <b>the page you’re reading</b>.";
+      d.title = "This chat covers the whole web book: follow links, move between pages and keep asking; the assistants remember " +
         "the conversation, get each page’s text and see what’s on screen. Use ✂︎ Select area to ask about part of the page; " +
         "paste, drop or 📎 attach a screenshot to ask about that.";
     } else if (isWeb()) {
-      d.innerHTML = "Nothing asked on this page yet in this chat.<br>Ask away: the assistants remember what you asked on the other pages.";
+      d.innerHTML = "Nothing asked on this page yet in this chat.";
+      d.title = "Ask away: the assistants remember what you asked on the other pages.";
     } else if (!state.messages.length) {
-      d.innerHTML = "Ask anything about <b>slide " + state.page + "</b>.<br>" +
-        "This chat covers the whole deck: move between slides and keep asking; the assistants remember the conversation " +
+      d.innerHTML = "Ask anything about <b>slide " + state.page + "</b>.";
+      d.title = "This chat covers the whole deck: move between slides and keep asking; the assistants remember the conversation " +
         "and see each slide you ask on. Use ✂︎ Select area to ask about part of a slide; paste, drop or 📎 attach a " +
         "screenshot to ask about that.";
     } else {
-      d.innerHTML = "Nothing asked on <b>slide " + state.page + "</b> yet in this chat.<br>Ask away: the assistants remember what you asked on the other slides.";
+      d.innerHTML = "Nothing asked on <b>slide " + state.page + "</b> yet in this chat.";
+      d.title = "Ask away: the assistants remember what you asked on the other slides.";
     }
     return d;
   }

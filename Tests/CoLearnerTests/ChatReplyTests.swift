@@ -399,7 +399,7 @@ struct ChatReplyTests {
         #expect(web.javaScriptErrors.isEmpty)
     }
 
-    @Test func aQuotedPartOfAnAnswerChangesTheButtonsAndStatusLine() async throws {
+    @Test func aQuotedPartOfAnAnswerChangesTheButtonsAndPlaceholder() async throws {
         let web = try await page()
         defer { web.close() }
         let quote: [String: Any] = ["id": "r1", "source": "Claude’s answer", "section": "slide 5",
@@ -407,8 +407,6 @@ struct ChatReplyTests {
         try await web.call("setAttachments", ["images": [], "quote": quote])
         #expect(try await web.evaluate("document.querySelector('.chip[data-action=explain]').textContent") as? String == "Explain this part")
         #expect(try await web.evaluate("document.querySelector('.chip[data-action=visualize]').textContent") as? String == "Visualize this part")
-        #expect(try await web.evaluate("document.querySelector('#attach').textContent") as? String
-                == "Slide 5 and the quoted part of the answer go with your question")
         #expect(try await web.evaluate("document.querySelector('#input').placeholder") as? String
                 == "Ask about the quoted part…  (Enter to send, Shift+Enter for a new line)")
         #expect(try await web.evaluate("document.querySelector('.att-q-from').textContent") as? String == "From Claude’s answer › slide 5")

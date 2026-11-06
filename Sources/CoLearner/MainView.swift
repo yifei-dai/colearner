@@ -84,12 +84,12 @@ struct DeckBar: View {
                 Button("Open a Web Page…") { model.openWebPagePanel() }
                 Button("Reload library") { model.reloadLibrary() }
             } label: {
-                Label("Lectures", systemImage: "books.vertical")
+                Text("Shortcuts")   // every section, not only lectures (web books, other PDFs…)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .hoverHighlight()
-            .help("Pick a lecture deck")
+            .help("Your sections' PDFs and web pages; Open a PDF…, Open a Web Page…")
 
             Divider().frame(height: 18)
 
@@ -286,7 +286,7 @@ struct WelcomeView: View {
     }
 }
 
-/// A section in the Lectures menu: what its linked folders hold (subfolders as submenus) and its linked PDFs.
+/// A section in the Shortcuts menu: what its linked folders hold (subfolders as submenus) and its linked PDFs.
 private struct SectionMenu: View {
     @EnvironmentObject var model: AppModel
     let contents: SectionContents

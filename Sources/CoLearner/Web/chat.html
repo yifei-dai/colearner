@@ -14,10 +14,6 @@
 </head>
 <body>
 <header id="head">
-  <div id="where">
-    <span id="where-deck">No slides open</span>
-    <span id="where-slide"></span>
-  </div>
   <div id="head-actions">
     <div id="viewseg" role="radiogroup" aria-label="Show">
       <button data-v="slide" role="radio" title="Messages asked on this slide">This slide</button>
@@ -27,6 +23,7 @@
     <button id="btn-new" class="ghost" title="Start a fresh chat about this deck (this one stays in History)">New chat</button>
   </div>
   <button id="btn-search" class="ghost" title="Search chats across all lecture decks (⇧⌘F)" aria-label="Search all chats">Search</button>
+  <button id="usage" title="Plan usage: click for details"></button>
 </header>
 <div id="others" hidden>
   <span class="others-label">Also asked on slides:</span>
@@ -58,15 +55,10 @@
       <button data-p="both" role="radio">Both</button>
     </div>
     <span id="pickers"></span>
-    <span class="grow"></span>
+    <span id="away" class="busynote"></span>
     <button id="btn-send" class="primary">Send</button>
   </div>
   <div id="note" role="status" aria-live="polite"></div>
-  <div id="status">
-    <span id="attach" title="The current slide image and text are sent with your first question on this slide"></span>
-    <span class="grow"></span>
-    <button id="usage" title="Plan usage: click for details"></button>
-  </div>
 </footer>
 <div id="search-layer" hidden>
   <section id="search-dialog" role="dialog" aria-modal="true" aria-labelledby="search-title">

@@ -40,7 +40,7 @@ private struct IconButtonBody: View {
     }
 }
 
-/// The same highlight for controls that aren't plain buttons (the Lectures and Appearance menus).
+/// The same highlight for controls that aren't plain buttons (the Shortcuts and Appearance menus).
 private struct HoverHighlight: ViewModifier {
     let cornerRadius: CGFloat
     @StateObject private var hover = HoverFlag()

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Finds study pages for decks by looking in each course's study folders, so a walkthrough or scribe-notes
-/// PDF made later shows up on the next launch (or Lectures › Reload library) without editing library.json.
+/// PDF made later shows up on the next launch (or Shortcuts › Reload library) without editing library.json.
 ///
 /// - Notes PDFs built with pdfTeX are matched exactly: each slide crop carries its deck file name (ScribeMap).
 ///   A `.tex` with the same name next to it is offered to Claude as readable notes.

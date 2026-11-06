@@ -360,13 +360,11 @@ struct WebBookTests {
         }
         #expect(try await text(".chip[data-action=\"explain\"]") == "Explain what’s shown")
         #expect(try await text(".chip[data-action=\"visualize\"]") == "Visualize what’s shown")
-        #expect(try await web.evaluate("document.getElementById('where').classList.contains('web')") as? Bool == true)
-        #expect(try await text("#where-deck") == "Interactive Linear Algebra")
-        #expect(try await text("#where-slide") == "Linear Transformations")
+        // The book and the page are on the tab and in the window title, not in the chat's header.
+        #expect(try await web.evaluate("!document.querySelector('#where')") as? Bool == true)
         #expect(try await text("#viewseg button[data-v=\"slide\"]") == "This page")
         #expect(try await text(".others-label") == "Also asked on pages:")
         #expect(try await text("#others-list button") == "Matrix Transformations")
-        #expect(try await text("#attach") == "What’s on screen goes with your question")
         #expect(try await web.evaluate("document.getElementById('input').placeholder") as? String
                 == "Ask about this page…  (Enter to send, Shift+Enter for a new line)")
         #expect(try await text("#log .empty")?.hasPrefix("Nothing asked on this page yet") == true)
@@ -385,7 +383,6 @@ struct WebBookTests {
         try await web.call("setThread", thread)
         #expect(try await text(".chip[data-action=\"explain\"]") == "Explain this slide")
         #expect(try await text("#viewseg button[data-v=\"slide\"]") == "This slide")
-        #expect(try await text("#where-slide") == "slide 2 / 2")
         #expect(try await web.evaluate("document.querySelectorAll('#log button.slide-ref').length") as? Int == 1)
     }
 

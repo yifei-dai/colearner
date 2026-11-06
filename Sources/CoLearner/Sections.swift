@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - the sections the user made (sections.json)
 
-/// A heading on the lecture page (the New Tab and the Lectures menu): folders and single PDFs the user linked to it.
+/// A heading on the lecture page (the New Tab and the Shortcuts menu): folders and single PDFs the user linked to it.
 /// A section only points at things; nothing on disk moves when sections change.
 struct LibrarySection: Codable, Hashable, Identifiable {
     var id: String

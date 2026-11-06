@@ -147,7 +147,7 @@ enum AppPaths {
     }
 }
 
-/// Everything the lecture page, the Lectures menu and the tabs show.
+/// Everything the lecture page, the Shortcuts menu and the tabs show.
 struct LibraryContents: Equatable {
     var sections: [SectionContents] = []
     /// Every PDF the sections list, as a deck, by path.

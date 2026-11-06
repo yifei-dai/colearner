@@ -37,21 +37,16 @@ body {
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 
+/* The deck and slide are on the tab and in the window title, so the header holds only the buttons (left) and the plan
+   usage (right). */
 #head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 6px;
   padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-/* In a narrow (popped-out) chat the deck title shortens first; "slide N / M" stays whole. */
-#where { flex: 1 1 150px; min-width: 0; display: flex; align-items: baseline; white-space: nowrap; overflow: hidden; }
-#where-deck { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#where-slide { color: var(--muted); margin-left: 6px; flex-shrink: 0; }
-/* A web tab: the book's name; the page's title (also on the tab) only where the header has room for both. */
-#head { container-type: inline-size; }
-#where.web #where-deck { flex-shrink: 0; max-width: 100%; }
-#where.web #where-slide { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-@container (max-width: 760px) { #where.web #where-slide { display: none; } }
 .ghost { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
 .ghost:hover { color: var(--ink); }
+/* the view toggle and the buttons next to it: one height (24 px) and one type size */
+#head .ghost { font-size: 12px; line-height: 18px; padding: 2px 8px; border-radius: 7px; }
 
 #others { padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 #others .pg { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 0 7px; margin: 0 2px; font-size: 12px; }
@@ -131,7 +126,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #providers button { border: 0; background: none; padding: 3px 10px; font-size: 12px; color: var(--muted); }
 #providers button + button { border-left: 1px solid var(--line); }
 #providers button.on { background: var(--user); color: var(--ink); font-weight: 600; }
-#attach { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 #pickers { display: inline-flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .pickbtn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg);
   border-radius: 8px; padding: 2px 8px; font-size: 12px; line-height: 18px; }
@@ -143,13 +137,30 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pickbtn .pk-effort { color: var(--muted); }
 .pickbtn .pk-fast { color: var(--accent); font-weight: 600; }
 .chev { color: var(--muted); font-size: 11px; }
-#status { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
-#usage { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; background: none; border: 1px solid transparent;
-  border-radius: 7px; padding: 1px 6px; color: var(--muted); font-size: 11.5px; }
+/* "Claude is answering on slide 7" next to Stop while that answer is not on screen; on a line of its own under the bar
+   where it doesn't fit there (fitAway in chat.js) */
+#away { flex: 1 1 0; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#away.below { order: 1; flex-basis: 100%; white-space: normal; }
+#btn-send { margin-left: auto; }
+/* Plan usage at the right end of the header. Where it doesn't fit next to the buttons, the assistants' names give way
+   to their dots ("week" becomes "wk"), then the windows' names go too (fitUsage in chat.js); on a row of its own it is
+   whole. */
+#usage { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; background: none;
+  border: 1px solid transparent; border-radius: 7px; padding: 2px 5px; line-height: 18px; color: var(--muted); font-size: 11.5px; }
 #usage:hover, #usage.open { border-color: var(--line); color: var(--ink); }
 #usage .u b { font-weight: 600; }
 #usage .warn { color: #c77c02; }
 #usage .hot { color: var(--warn); font-weight: 600; }
+#usage .u-dot { display: none; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+#usage .u-dot.claude { background: var(--claude); }
+#usage .u-dot.codex { background: var(--codex); }
+#usage:is([data-form=short], [data-form=shorter]) .u-dot { display: inline-block; }
+#usage:is([data-form=short], [data-form=shorter]) .u-who { display: none; }
+#usage .u-abbr { display: none; }
+#usage[data-form=short] .u-long { display: none; }
+#usage[data-form=short] .u-abbr { display: inline; }
+#usage[data-form=shorter] .u-wl { display: none; }
+#usage .chev { margin-left: -4px; }
 .grow { flex: 1; }
 .primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 4px 14px; font-weight: 600; }
 .primary.stop { background: var(--warn); }
@@ -210,10 +221,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ticks span { cursor: pointer; min-width: 0; }
 .ticks span.on { color: var(--ink); font-weight: 600; }
 
-/* header: view toggle, history, new chat */
-#head-actions { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }   /* right-aligned, also on its own row */
+/* header: view toggle, history, new chat (then Search), together on the left */
+#head-actions { display: inline-flex; gap: 6px; align-items: center; }
 #viewseg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
-#viewseg button { border: 0; background: none; padding: 1px 8px; font-size: 12px; color: var(--muted); }
+#viewseg button { border: 0; background: none; padding: 2px 8px; font-size: 12px; line-height: 18px; color: var(--muted); }
 #viewseg button + button { border-left: 1px solid var(--line); }
 #viewseg button.on { background: var(--user); color: var(--ink); font-weight: 600; }
 .banner { font-size: 12px; color: var(--muted); background: var(--code-bg); border-radius: 8px; padding: 6px 9px; margin: 0 0 12px; }
@@ -230,7 +241,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* pictures and a quoted passage waiting for the next question; chips wrap in a narrow panel. In a short window they
    give way first and scroll, so the conversation keeps a quarter of the window (fitLog in chat.js, as far as the chat
    box's own rows leave room, and only in a window of 520 px or more); if even the rows don't fit, the top of the chat
-   box is cut rather than Send and the status line. */
+   box is cut rather than the row with Send. */
 #attachbox { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; min-width: 0; min-height: 0; overflow-y: auto; }
 #composer > #attachbox { flex-shrink: 1; }
 #attachbox > * { flex-shrink: 0; }
