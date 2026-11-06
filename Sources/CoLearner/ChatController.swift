@@ -34,14 +34,11 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var searchRequest: (query: String, id: Int)?
     private var searchResults: [ChatSearchResult] = []
     private var searchPending = false
-    /// Last plan usage per assistant (kept across launches). Updated after every answer and on demand.
-    private struct Usage {
-        var plan: String?; var windows: [UsageWindow]; var updated: Double; var loading = false; var error: String?
-        var signedOut = false
-    }
     /// Signing Claude / ChatGPT in again from the chat (a login that expired).
     let signIn = SignIn()
-    private var usage: [Provider: Usage] = [:]
+    /// Last plan usage per assistant (kept across launches), shown in the Usage menu. Updated after every answer, when
+    /// the menu bar opens (at most every 2 minutes) and with Refresh.
+    private var usage: [Provider: PlanUsageEntry] = [:]
 
     init(model: AppModel) {
         self.model = model
@@ -111,7 +108,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         for p in Provider.allCases {
             if let d = UserDefaults.standard.data(forKey: "usage.\(p.rawValue)"),
                let w = try? JSONDecoder().decode([UsageWindow].self, from: d) {
-                usage[p] = Usage(plan: UserDefaults.standard.string(forKey: "usage.\(p.rawValue).plan"), windows: w,
+                usage[p] = PlanUsageEntry(plan: UserDefaults.standard.string(forKey: "usage.\(p.rawValue).plan"), windows: w,
                                  updated: UserDefaults.standard.double(forKey: "usage.\(p.rawValue).at"))
             }
         }
@@ -125,7 +122,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         for p in Provider.allCases {
             if usage[p]?.loading == true { continue }
             if !force, let u = usage[p], now - u.updated < 120, !u.windows.isEmpty { continue }
-            var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
+            var u = usage[p] ?? PlanUsageEntry(plan: nil, windows: [], updated: 0)
             u.loading = true
             usage[p] = u
             switch p {
@@ -159,7 +156,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
     }
 
     private func finishUsage(_ p: Provider, _ r: UsageFetcher.Result) {
-        var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
+        var u = usage[p] ?? PlanUsageEntry(plan: nil, windows: [], updated: 0)
         u.loading = false
         u.signedOut = r.signedOut
         if r.windows.isEmpty {
@@ -177,7 +174,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
 
     /// After an answer: the tool reported some windows; update those, keep the rest (e.g. Fable's week).
     private func setUsage(_ p: Provider, _ w: [UsageWindow]) {
-        var u = usage[p] ?? Usage(plan: nil, windows: [], updated: 0)
+        var u = usage[p] ?? PlanUsageEntry(plan: nil, windows: [], updated: 0)
         for nw in w {
             if let i = u.windows.firstIndex(where: { $0.label == nw.label }) {
                 var merged = nw
@@ -201,19 +198,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
         if let plan = u.plan { UserDefaults.standard.set(plan, forKey: "usage.\(p.rawValue).plan") }
     }
 
-    /// Whether the chat header shows the plan usage.
-    func pushUsageHidden() { js("setUsageHidden", model.usageHidden) }
-
+    /// The Usage menu in the menu bar shows it.
     private func pushUsage() {
-        var d: [String: Any] = [:]
-        for (p, u) in usage {
-            var e: [String: Any] = ["windows": u.windows.map(\.js), "updated": u.updated, "loading": u.loading]
-            if let plan = u.plan { e["plan"] = plan }
-            if let err = u.error { e["error"] = err }
-            if u.signedOut { e["signedOut"] = true }
-            d[p.rawValue] = e
-        }
-        js("setUsage", d)
+        if model.planUsage != usage { model.planUsage = usage }
     }
 
     // MARK: sign in again / ask again
@@ -230,6 +217,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
         var d: [String: String] = [:]
         for p in Provider.allCases { d[p.rawValue] = (signIn.phase[p] ?? .idle).rawValue }
         js("setSignIn", d)
+        if model.signInPhase != signIn.phase { model.signInPhase = signIn.phase }   // the Usage menu's sign-in
     }
 
     /// "Ask again" on an answer that failed: the same question, to the same assistant, on the slide it was asked on,
@@ -583,7 +571,6 @@ final class ChatController: NSObject, WKNavigationDelegate {
             searchResults = []
             showCurrent()
             pushConfig()
-            pushUsageHidden()
             loadUsage()
             pushSignIn()
             refreshModels()
@@ -615,10 +602,6 @@ final class ChatController: NSObject, WKNavigationDelegate {
             NSLog("Co-learner chat page error: %@", body["message"] as? String ?? "?")
         case "refreshModels":
             refreshModels()
-        case "refreshUsage":
-            refreshUsage(force: body["force"] as? Bool ?? false)
-        case "setUsageHidden":   // "Hide from the chat header" in the usage card
-            if let hidden = body["hidden"] as? Bool { model.usageHidden = hidden }
         case "setEffort":
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let e = body["effort"] as? String else { return }
             if p == .claude { model.claudeEffort = e } else { model.codexEffort = e }

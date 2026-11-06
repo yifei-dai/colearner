@@ -40,9 +40,6 @@ struct CoLearnerApp: App {
                 Button(model.thumbnailsHidden ? "Show Thumbnails" : "Hide Thumbnails") { model.toggleThumbnails() }
                     .keyboardShortcut("t", modifiers: [.command, .option])
                     .disabled(model.document == nil)
-                // The usage line at the right of the chat header.
-                Button(model.usageHidden ? "Show Plan Usage" : "Hide Plan Usage") { model.usageHidden.toggle() }
-                    .keyboardShortcut("u", modifiers: [.command, .option])
                 Divider()
                 // Web tabs: the page's text size, kept per book.
                 Button("Zoom In") { model.zoomWeb(1) }.keyboardShortcut("=", modifiers: .command).disabled(model.web == nil)
@@ -86,6 +83,21 @@ struct CoLearnerApp: App {
                 Divider()
                 Button("Reload Library") { model.reloadLibrary() }.keyboardShortcut("r", modifiers: [.command, .shift])
             }
+            // Plan usage, in the menu bar instead of the chat: each assistant's windows and when they reset. The numbers
+            // are fetched again when the menu bar opens (at most every 2 minutes) and after every answer.
+            CommandMenu("Usage") {
+                ForEach(UsageMenu.sections(model.planUsage, signIn: model.signInPhase), id: \.provider) { s in
+                    Section(s.title) {
+                        ForEach(Array(s.lines.enumerated()), id: \.offset) { Text($0.element) }
+                        if let title = s.signIn { Button(title) { model.chat.startSignIn(s.provider) } }
+                    }
+                }
+                Section {
+                    if let updated = UsageMenu.footer(model.planUsage) { Text(updated) }
+                    Button(UsageMenu.loading(model.planUsage) ? "Checking…" : "Refresh") { model.chat.refreshUsage(force: true) }
+                        .disabled(UsageMenu.loading(model.planUsage))
+                }
+            }
         }
         Settings {
             SettingsView().environmentObject(model)
@@ -107,6 +119,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        // Opening the menu bar fetches the plan usage again (skipped when it is under 2 minutes old), so the Usage menu
+        // shows fresh numbers.
+        NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] n in
+            MainActor.assumeIsolated {
+                guard let menu = n.object as? NSMenu, menu === NSApp.mainMenu else { return }
+                self?.model?.chat.refreshUsage(force: false)
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -166,7 +186,6 @@ struct SettingsView: View {
                     ForEach(AppModel.appearances, id: \.id) { a in Text(a.label).tag(a.id) }
                 }
                 .pickerStyle(.segmented)
-                Toggle("Plan usage in the chat header (⌥⌘U)", isOn: Binding(get: { !model.usageHidden }, set: { model.usageHidden = !$0 }))
             }
             Section("Files") {
                 LabeledContent("Chats are saved in", value: AppPaths.chats.path)

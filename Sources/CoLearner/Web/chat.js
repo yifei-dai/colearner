@@ -94,8 +94,6 @@
   }
   // {claude: {models:[{id,label}], model, efforts:[...], effort}, codex: {...}} — from Swift
   let config = {};
-  // {claude: {windows:[{label, percent, resetsAt}], updated}, codex: {...}} — from Swift
-  let usage = {};
   // Signing an assistant in again after its login expired: {claude: "idle"|"waiting"|"signedIn"|"failed", codex: …}.
   let signIn = {};
   const elById = new Map();
@@ -151,12 +149,9 @@
       + (isWeb() ? "“" + clip(pageName(page), 40) + "”" : "slide " + page)).join(" · ");
   }
 
-  let headSig = null;
   function renderHeader() {
-    // The deck and slide are on the tab and in the window title: the header has only its buttons and the plan usage,
-    // which gets the room the buttons leave (measured again when they change).
-    const hs = (state.hasDeck ? "d" : "-") + (isWeb() ? "w" : "s");
-    if (hs !== headSig) { headSig = hs; fitUsageSoon(); }
+    // The deck and slide are on the tab and in the window title, plan usage in the app's Usage menu: the header has only
+    // the view toggle (left) and History, New chat and Search (right).
     for (const b of document.querySelectorAll("#viewseg button")) {
       b.classList.toggle("on", (b.dataset.v === "all") === viewAll);
       if (b.dataset.v === "slide") {
@@ -167,7 +162,7 @@
       }
     }
     $(".others-label").textContent = isWeb() ? "Also asked on pages:" : "Also asked on slides:";
-    $("#head-actions").hidden = !state.hasDeck;
+    $("#viewseg").hidden = $("#head-actions").hidden = !state.hasDeck;
     const others = viewAll ? [] : (state.pages || []).filter((p) => p !== state.page);
     const box = $("#others");
     const list = $("#others-list");
@@ -325,37 +320,11 @@
   // The header's height (its bottom line included), so the bar above a web page next to the chat ends on the same line.
   let headHeight = 0;
   new ResizeObserver(() => {
-    fitUsageSoon();
     const h = Math.round($("#head").getBoundingClientRect().height * 2) / 2;
     if (h > 0 && h !== headHeight) { headHeight = h; post({ type: "headHeight", height: h }); }
   }).observe($("#head"));
-  window.addEventListener("resize", () => { fitAway(); fitLog(); fitUsageSoon(); });
+  window.addEventListener("resize", () => { fitAway(); fitLog(); });
 
-  /// The plan usage shares the header's row with the buttons. Where the whole line doesn't fit there, the assistants'
-  /// names give way to their dots ("week" to "wk"), then the windows' names go too; only if even that doesn't fit does
-  /// it go to a row of its own, as whole as that row allows.
-  function fitUsage() {
-    const box = $("#usage"), search = $("#btn-search"), head = $("#head");
-    if (box.hidden) return;
-    const forms = ["", "short", "shorter"];
-    const wrapped = () => box.getBoundingClientRect().top >= search.getBoundingClientRect().bottom - 1;
-    const fits = () => box.getBoundingClientRect().right <= head.getBoundingClientRect().right - parseFloat(getComputedStyle(head).paddingRight) + 0.5;
-    for (const form of forms) {
-      box.dataset.form = form;
-      if (!wrapped()) return;
-    }
-    for (const form of forms) {
-      box.dataset.form = form;
-      if (fits()) return;
-    }
-  }
-  // On the next frame: changing the line inside the header's resize observer would be a resize loop.
-  let usageFitQueued = false;
-  function fitUsageSoon() {
-    if (usageFitQueued) return;
-    usageFitQueued = true;
-    requestAnimationFrame(() => { usageFitQueued = false; fitUsage(); });
-  }
   /// Pictures the app is still decoding (dropped, pasted or chosen a moment ago).
   function preparing() { return Number.isInteger(state.processing) && state.processing > 0 ? state.processing : 0; }
   function removeButton(title, label, onclick, key) {
@@ -368,8 +337,8 @@
     return x;
   }
 
-  // ---------- model menu and usage card (popovers) ----------
-  let pop = null; // {kind:'model', provider} | {kind:'usage'}
+  // ---------- model menu and history (popovers) ----------
+  let pop = null; // {kind:'model', provider} | {kind:'history'}
   const popEl = document.createElement("div");
   popEl.className = "pop";
   popEl.hidden = true;
@@ -378,7 +347,7 @@
   function closePop() {
     pop = null;
     popEl.hidden = true;
-    document.querySelectorAll(".pickbtn.open, #usage.open").forEach((b) => b.classList.remove("open"));
+    document.querySelectorAll(".pickbtn.open").forEach((b) => b.classList.remove("open"));
   }
   function placePop(anchor, alignRight) {
     const r = anchor.getBoundingClientRect();
@@ -393,7 +362,7 @@
   }
   document.addEventListener("mousedown", (e) => {
     if (!pop) return;
-    if (popEl.contains(e.target) || e.target.closest(".pickbtn") || e.target.closest("#usage") || e.target.closest("#btn-history")) return;
+    if (popEl.contains(e.target) || e.target.closest(".pickbtn") || e.target.closest("#btn-history")) return;
     closePop();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pop) { closePop(); e.stopPropagation(); } }, true);
@@ -689,77 +658,6 @@
     placePop($("#btn-history"), true);
   }
 
-  function resetText(w) {
-    if (w.resetsAt) {
-      const d = new Date(w.resetsAt * 1000), now = new Date();
-      const mins = Math.max(0, Math.round((d - now) / 60000));
-      const rel = mins < 60 ? mins + " min" : mins < 1440 ? Math.floor(mins / 60) + " h " + (mins % 60) + " min" : Math.round(mins / 1440) + " days";
-      const abs = d.toDateString() === now.toDateString()
-        ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-        : d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-      return "Resets in " + rel + " (" + abs + ")";
-    }
-    return w.resetsText ? "Resets " + w.resetsText : "";
-  }
-
-  function renderUsagePop(anchor) {
-    popEl.textContent = "";
-    const head = el("div", "pop-head");
-    head.appendChild(el("span", "pop-title", "Plan usage"));
-    const loading = ["claude", "codex"].some((p) => usage[p] && usage[p].loading);
-    const rb = el("button", "refresh", loading ? "Updating…" : "↻ Refresh");
-    rb.disabled = loading;
-    rb.onclick = () => post({ type: "refreshUsage", force: true });
-    head.appendChild(rb);
-    popEl.appendChild(head);
-    let newest = 0;
-    for (const p of ["claude", "codex"]) {
-      const u = usage[p];
-      const sec = el("div", "u-sec");
-      const name = el("div", "u-name " + p, NAMES[p]);
-      if (u && u.plan) name.appendChild(el("span", "plan", u.plan));
-      sec.appendChild(name);
-      if (u && u.windows && u.windows.length) {
-        for (const w of u.windows) {
-          const pct = Math.round(w.percent);
-          const row = el("div", "u-row");
-          const top = el("div", "u-top");
-          top.appendChild(el("span", "", w.title || w.label));
-          top.appendChild(el("span", "u-pct" + (pct >= 95 ? " hot" : pct >= 80 ? " warn" : ""), pct + "% used"));
-          row.appendChild(top);
-          const bar = el("div", "bar");
-          const fill = el("div", "fill" + (pct >= 95 ? " hot" : pct >= 80 ? " warn" : ""));
-          fill.style.width = Math.min(100, Math.max(0, w.percent)) + "%";
-          bar.appendChild(fill);
-          row.appendChild(bar);
-          const rt = resetText(w);
-          if (rt) row.appendChild(el("div", "u-reset", rt));
-          sec.appendChild(row);
-        }
-        newest = Math.max(newest, u.updated || 0);
-      } else {
-        sec.appendChild(el("div", "u-reset", u && u.loading ? "Checking…" : (u && u.error) || "No data yet."));
-      }
-      if (u && u.signedOut && !u.loading) {
-        const waiting = signIn[p] === "waiting";
-        const b = el("button", "primary u-signin", waiting ? "Open sign-in again" : "Sign in to " + NAMES[p]);
-        b.onclick = () => post({ type: "signIn", provider: p });
-        sec.appendChild(b);
-        if (waiting) sec.appendChild(el("div", "u-reset", "Finish in your browser (click Authorize); this updates by itself."));
-      }
-      if (u && u.error && u.windows && u.windows.length) sec.appendChild(el("div", "u-err", "Last refresh failed: " + u.error));
-      popEl.appendChild(sec);
-    }
-    if (newest) popEl.appendChild(el("div", "u-foot", "Updated " + new Date(newest * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · also refreshed after every answer"));
-    // Hiding the line here; View › Show Plan Usage (or Settings) brings it back.
-    const hide = el("div", "u-hide");
-    const hb = el("button", "link", "Hide from the chat header");
-    hb.onclick = () => post({ type: "setUsageHidden", hidden: true });
-    hide.append(hb, el("span", "", "View › Show Plan Usage (⌥⌘U) brings it back"));
-    popEl.appendChild(hide);
-    placePop(anchor, true);
-  }
-
   // `refreshPop`: redraw an open model menu too (when the choices changed), not on every chat update.
   let pickSig = null;
   function renderPickers(refreshPop) {
@@ -803,46 +701,6 @@
       if (!anchor || !config[pop.provider]) closePop();
       else if (refreshPop) renderModelPop(pop.provider);
     }
-  }
-
-  /// "Claude 5h 1% · week 0%  ChatGPT 5h 0% · week 7%" at the right of the header. Each assistant's dot (its color in
-  /// the model button) stands in for its name where the header is short (fitUsage); the tooltip always says all of it.
-  function renderUsage() {
-    const box = $("#usage");
-    box.textContent = "";
-    const said = [];
-    for (const p of ["claude", "codex"]) {
-      const u = usage[p];
-      const signedOut = !!(u && u.signedOut);
-      if (!signedOut && (!u || !u.windows || !u.windows.length)) continue;
-      const span = el("span", "u");
-      span.append(el("span", "u-dot " + p), el("b", "u-who", NAMES[p] + " "));
-      if (signedOut) {
-        span.appendChild(el("span", "warn", "signed out"));
-        said.push(NAMES[p] + " signed out");
-      } else {
-        const parts = [];
-        u.windows.slice(0, 2).forEach((w, i) => {
-          const pct = Math.round(w.percent);
-          const s = el("span", pct >= 95 ? "hot" : pct >= 80 ? "warn" : "", i ? " · " : "");
-          // "week" is "wk" in the short line
-          const abbr = w.label === "week" ? "wk" : w.label;
-          s.appendChild(el("span", abbr === w.label ? "u-wl" : "u-wl u-long", w.label + " "));
-          if (abbr !== w.label) s.appendChild(el("span", "u-wl u-abbr", abbr + " "));
-          s.append(pct + "%");
-          span.appendChild(s);
-          parts.push(w.label + " " + pct + "%");
-        });
-        said.push(NAMES[p] + " " + parts.join(" · "));
-      }
-      box.appendChild(span);
-    }
-    if (!said.length) box.appendChild(el("span", "", "Usage"));
-    box.appendChild(el("span", "chev", "⌄"));
-    box.title = "Plan usage" + (said.length ? ": " + said.join(", ") : "") + ". Click for details";
-    box.setAttribute("aria-label", box.title);   // the short line hides the names
-    if (pop && pop.kind === "usage") renderUsagePop(box);
-    fitUsageSoon();
   }
 
   /// One line; how the chat works is in its tooltip.
@@ -1266,17 +1124,6 @@
     setSignIn(s) {
       signIn = s || {};
       refreshRetryRows();
-      renderUsage();
-    },
-    setUsage(u) {
-      usage = u || {};
-      renderUsage();
-    },
-    /// The usage line hidden from the header (View › Hide Plan Usage, its card, Settings).
-    setUsageHidden(h) {
-      $("#usage").hidden = h === true;
-      if (h === true && pop && pop.kind === "usage") closePop();
-      fitUsageSoon();
     },
     focusInput() {
       input.focus();
@@ -1683,15 +1530,6 @@
       renderHeader();
       post({ type: "setProvider", provider: b.dataset.p });
     };
-  $("#usage").onclick = () => {
-    const box = $("#usage");
-    if (pop && pop.kind === "usage") { closePop(); return; }
-    closePop();
-    pop = { kind: "usage" };
-    box.classList.add("open");
-    renderUsagePop(box);
-    post({ type: "refreshUsage", force: false });
-  };
 
   window.addEventListener("message", (e) => {
     const d = e.data;

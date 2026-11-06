@@ -14,16 +14,17 @@
 </head>
 <body>
 <header id="head">
-  <div id="head-actions">
-    <div id="viewseg" role="radiogroup" aria-label="Show">
-      <button data-v="slide" role="radio" title="Messages asked on this slide">This slide</button>
-      <button data-v="all" role="radio" title="The whole conversation about this deck">All</button>
-    </div>
-    <button id="btn-history" class="ghost" title="Earlier chats about this deck">History ⌄</button>
-    <button id="btn-new" class="ghost" title="Start a fresh chat about this deck (this one stays in History)">New chat</button>
+  <div id="viewseg" role="radiogroup" aria-label="Show">
+    <button data-v="slide" role="radio" title="Messages asked on this slide">This slide</button>
+    <button data-v="all" role="radio" title="The whole conversation about this deck">All</button>
   </div>
-  <button id="btn-search" class="ghost" title="Search chats across all lecture decks (⇧⌘F)" aria-label="Search all chats">Search</button>
-  <button id="usage" title="Plan usage: click for details"></button>
+  <div id="head-right">
+    <div id="head-actions">
+      <button id="btn-history" class="ghost" title="Earlier chats about this deck">History ⌄</button>
+      <button id="btn-new" class="ghost" title="Start a fresh chat about this deck (this one stays in History)">New chat</button>
+    </div>
+    <button id="btn-search" class="ghost" title="Search chats across all lecture decks (⇧⌘F)" aria-label="Search all chats">Search</button>
+  </div>
 </header>
 <div id="others" hidden>
   <span class="others-label">Also asked on slides:</span>

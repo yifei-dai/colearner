@@ -231,20 +231,12 @@ final class ModelCatalog {
 }
 
 /// Plan usage as the CLIs report it ("5h 32%", "week 26%").
-struct UsageWindow: Codable {
+struct UsageWindow: Codable, Equatable {
     var label: String           // short: "5h", "week", "Fable wk"
     var percent: Double
     var resetsAt: Double?
     var title: String? = nil    // long: "Current session", "Current week (all models)"
     var resetsText: String? = nil
-
-    var js: [String: Any] {
-        var d: [String: Any] = ["label": label, "percent": percent]
-        if let resetsAt { d["resetsAt"] = resetsAt }
-        if let title { d["title"] = title }
-        if let resetsText { d["resetsText"] = resetsText }
-        return d
-    }
 
     static func windowLabel(minutes: Int) -> String {
         switch minutes {

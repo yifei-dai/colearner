@@ -181,20 +181,4 @@ struct SignInTests {
         #expect(!web.messages.contains { $0["type"] as? String == "askAgain" })
         #expect(web.javaScriptErrors.isEmpty)
     }
-
-    @Test func theUsageCardOffersSignInWhenSignedOut() async throws {
-        let web = ChatWebFixture()
-        try await web.load()
-        defer { web.close() }
-        try await web.call("setThread", thread(failed))
-        try await web.call("setUsage", ["claude": ["windows": [], "updated": 0, "loading": false,
-                                                   "error": "Not signed in.", "signedOut": true]])
-        try await web.waitFor("document.querySelector('#usage').textContent.includes('signed out')")
-        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
-        try await web.waitFor("!!document.querySelector('.u-signin')")
-        web.clearMessages()
-        _ = try await web.evaluate("document.querySelector('.u-signin').click(); null;")
-        #expect(try await web.waitForMessage(type: "signIn")["provider"] as? String == "claude")
-        #expect(web.javaScriptErrors.isEmpty)
-    }
 }

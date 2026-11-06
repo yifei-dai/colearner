@@ -860,57 +860,47 @@ struct ChatAttachmentUITests {
 
     // MARK: the header and the bar
 
-    /// The header has no deck title (the tab and window title show it): its view toggle and buttons, one height, sit
-    /// together on the left and the plan usage at the right, as whole as the row allows. The chat box ends with the
-    /// bar (no status line); an answer running on another slide is named next to Stop or, where that has no room, under it.
-    @Test func theHeaderHoldsTheButtonsAndThePlanUsageAndTheBarNamesAnAnswerElsewhere() async throws {
+    /// The header has no deck title (the tab and window title show it) and no plan usage (the app's Usage menu has it):
+    /// the view toggle on the left, History, New chat and Search together on the right, all one height. The chat box
+    /// ends with the bar (no status line); an answer running on another slide is named next to Stop or, where that has
+    /// no room, under it.
+    @Test func theHeaderHasTheToggleLeftAndItsButtonsRightAndTheBarNamesAnAnswerElsewhere() async throws {
         let web = ChatWebFixture()
         defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
         try await shortChat(web)
-        try await web.call("setUsage", [
-            "claude": ["windows": [["label": "5h", "percent": 1], ["label": "week", "percent": 0]], "updated": 0],
-            "codex": ["windows": [["label": "5h", "percent": 0], ["label": "week", "percent": 7]], "updated": 0]])
         try await web.call("setThread", thread())
-        #expect(try await flag("!document.querySelector('#where, #status, #attach')", in: web))
-        #expect(try await flag("""
-            (() => { const b = ['#viewseg', '#btn-history', '#btn-new', '#btn-search'].map(s => document.querySelector(s).getBoundingClientRect());
-                     return b[0].left < 14 && b.every((r, i) => Math.abs(r.height - b[0].height) < 0.5 && Math.abs(r.top - b[0].top) < 0.5
-                       && (i === 0 || r.left - b[i - 1].right < 8)); })()
-            """, in: web), "the header's buttons differ in height or stand apart")
+        #expect(try await flag("!document.querySelector('#where, #status, #attach, #usage')", in: web))
         #expect(try await text("#log .empty", in: web) == "Ask anything about slide 4.")
         #expect((try await web.evaluate("document.querySelector('#log .empty').title") as? String)?.isEmpty == false)
-        #expect(try await web.evaluate("document.querySelector('#usage').title") as? String
-                == "Plan usage: Claude 5h 1% · week 0%, ChatGPT 5h 0% · week 7%. Click for details")
         #expect(try await flag("(c => c.bottom - document.querySelector('#bar').getBoundingClientRect().bottom < 12)(document.querySelector('#composer').getBoundingClientRect())", in: web),
                 "something under the bar")
-
-        // Names, then dots for them ("wk" for "week"), then no windows' names; a narrow chat puts the whole line on a row of
-        // its own.
-        let usage = """
-            (() => { const u = document.querySelector('#usage'), r = u.getBoundingClientRect(), s = document.querySelector('#btn-search').getBoundingClientRect(),
-                       h = document.querySelector('#head').getBoundingClientRect();
-                     return [u.dataset.form || 'whole', r.top < s.bottom ? 'beside' : 'below', r.right <= h.right - 11.5,
-                             Math.round(h.height)].join(' '); })()
+        // (588 px: a 1512 pt wide window at 3 : 2; 340 px: the narrowest pop-out, where the buttons get a row of their own)
+        let layout = """
+            (() => { const r = (s) => document.querySelector(s).getBoundingClientRect(), h = r('#head'), t = r('#viewseg');
+                     const b = ['#btn-history', '#btn-new', '#btn-search'].map(r);
+                     const same = [t, ...b].every(x => Math.abs(x.height - t.height) < 0.5);
+                     const together = b.every((x, i) => Math.abs(x.top - b[0].top) < 0.5 && (i === 0 || x.left - b[i - 1].right < 8));
+                     return [t.left < 14, Math.abs(b[2].right - (h.right - 12)) < 1, same, together, Math.round(h.height)].join(' '); })()
             """
-        // (588 px: a 1512 pt wide window at 3 : 2)
-        for (width, expected) in [(820.0, "whole beside true 41"), (640.0, "short beside true 41"), (588.0, "short beside true 41"),
-                                  (530.0, "shorter beside true 41"), (420.0, "whole below true 71")] {
+        for (width, rows) in [(820.0, 41), (588.0, 41), (420.0, 41), (340.0, 71)] {
             web.webView.frame.size = NSSize(width: width, height: 700)
             try await web.waitFor("window.innerWidth === \(Int(width))")
             try await Task.sleep(for: .milliseconds(80))
-            #expect(try await web.evaluate(usage) as? String == expected, "usage at \(Int(width)) px")
+            #expect(try await web.evaluate(layout) as? String == "true true true true \(rows)", "header at \(Int(width)) px")
             #expect(try await flag("document.documentElement.scrollWidth <= window.innerWidth", in: web))
             if width == 588 { try await snapshot(web, "colearner-header-588.png") }
         }
-        // Its card opens under the header.
-        web.webView.frame.size = NSSize(width: 640, height: 700)
-        try await web.waitFor("window.innerWidth === 640")
-        try await Task.sleep(for: .milliseconds(80))
-        try await snapshot(web, "colearner-header-640.png")
-        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
+        // History opens under its button, inside the window.
+        web.webView.frame.size = NSSize(width: 588, height: 700)
+        try await web.waitFor("window.innerWidth === 588")
+        _ = try await web.evaluate("document.querySelector('#btn-history').click(); null;")
         try await web.waitFor("!document.querySelector('.pop').hidden")
-        #expect(try await flag("document.querySelector('.pop').getBoundingClientRect().top >= document.querySelector('#usage').getBoundingClientRect().bottom", in: web))
-        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
+        #expect(try await flag("(p => p.top >= document.querySelector('#btn-history').getBoundingClientRect().bottom && p.left >= 0 && p.right <= innerWidth)(document.querySelector('.pop').getBoundingClientRect())", in: web))
+        _ = try await web.evaluate("document.querySelector('#btn-history').click(); null;")
+        // Without a deck only Search shows, still at the right.
+        try await web.call("setThread", thread(hasDeck: false))
+        #expect(try await flag("document.querySelector('#viewseg').hidden && document.querySelector('#head-actions').hidden", in: web))
+        #expect(try await flag("(s => s.width > 0 && Math.abs(s.right - (innerWidth - 12)) < 1)(document.querySelector('#btn-search').getBoundingClientRect())", in: web))
 
         // An answer on slide 7, not on screen: next to Stop; with both model buttons in the bar, on a line under it.
         let question: [String: Any] = ["id": "q", "role": "user", "page": 7, "text": "Why?", "status": "done"]
@@ -918,8 +908,6 @@ struct ChatAttachmentUITests {
         let codex: [String: Any] = ["id": "b", "role": "assistant", "provider": "codex", "page": 7, "text": "", "status": "streaming"]
         web.webView.frame.size = NSSize(width: 720, height: 700)
         try await web.waitFor("window.innerWidth === 720")
-        try await Task.sleep(for: .milliseconds(80))
-        #expect(try await web.evaluate(usage) as? String == "whole beside true 41", "usage at 720 px after the card")
         var t = thread(messages: [question, claude])
         try await web.call("setThread", t)
         #expect(try await text("#btn-send", in: web) == "Stop")
@@ -936,39 +924,6 @@ struct ChatAttachmentUITests {
         try await web.waitFor("document.querySelector('#away').textContent === ''")
         _ = try await web.evaluate("document.querySelector('#viewseg [data-v=slide]').click(); null;")
         try await snapshot(web, "colearner-header-and-bar-720.png")
-    }
-
-    /// The usage line hides from the header (the app's View › Hide Plan Usage ⌥⌘U, Settings, or the link in its card)
-    /// and comes back where it was.
-    @Test func thePlanUsageCanBeHiddenAndShownAgain() async throws {
-        let web = ChatWebFixture()
-        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
-        try await shortChat(web)
-        let usage: [String: Any] = [
-            "claude": ["windows": [["label": "5h", "percent": 1], ["label": "week", "percent": 0]], "updated": 0],
-            "codex": ["windows": [["label": "5h", "percent": 0], ["label": "week", "percent": 7]], "updated": 0]]
-        try await web.call("setUsage", usage)
-        try await web.call("setThread", thread())
-        // The card's link asks the app to hide the line.
-        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
-        try await web.waitFor("!!document.querySelector('.pop:not([hidden]) .u-hide .link')")
-        try await snapshot(web, "colearner-usage-card.png")
-        web.clearMessages()
-        _ = try await web.evaluate("document.querySelector('.pop .u-hide .link').click(); null;")
-        #expect(try await web.waitForMessage(type: "setUsageHidden")["hidden"] as? Bool == true)
-        // The app's answer hides it and closes the card; the buttons stay where they were.
-        let left = "document.querySelector('#btn-search').getBoundingClientRect().left"
-        let search = try await web.evaluate(left) as? Double
-        try await web.call("setUsageHidden", true)
-        #expect(try await flag("document.querySelector('#usage').getBoundingClientRect().width === 0 && document.querySelector('.pop').hidden", in: web))
-        #expect(try await web.evaluate(left) as? Double == search)
-        // New numbers while it is hidden keep it hidden; shown again, it is back on the header's row.
-        try await web.call("setUsage", usage)
-        #expect(try await flag("document.querySelector('#usage').hidden", in: web))
-        try await web.call("setUsageHidden", false)
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(try await flag("(u => u.width > 0 && u.top < document.querySelector('#btn-search').getBoundingClientRect().bottom)(document.querySelector('#usage').getBoundingClientRect())", in: web))
-        #expect(try await text("#usage", in: web)?.contains("ChatGPT") == true)
     }
 
     /// With COLEARNER_TEST_SNAPSHOTS set, a picture of the page: in that folder when it names one, else in /tmp.

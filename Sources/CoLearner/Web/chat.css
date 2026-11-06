@@ -37,15 +37,15 @@ body {
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 
-/* The deck and slide are on the tab and in the window title, so the header holds only the buttons (left) and the plan
-   usage (right). */
+/* The deck and slide are on the tab and in the window title, and plan usage is in the app's Usage menu, so the header
+   holds only the view toggle (left) and History, New chat and Search (right). */
 #head {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 6px;
   padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
 .ghost { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
 .ghost:hover { color: var(--ink); }
-/* the view toggle and the buttons next to it: one height (24 px) and one type size */
+/* the view toggle and the buttons: one height (24 px) and one type size */
 #head .ghost { font-size: 12px; line-height: 18px; padding: 2px 8px; border-radius: 7px; }
 
 #others { padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
@@ -86,7 +86,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .msg.assistant .retry .primary { font-size: 12px; padding: 4px 12px; }
 .msg.assistant .retry .hint { color: var(--muted); }
 .msg.assistant .retry .ok { color: var(--muted); }
-.pop .u-signin { margin-top: 6px; font-size: 12px; }
 .body p { margin: .5em 0; }
 .body ul, .body ol { padding-left: 1.4em; margin: .4em 0; }
 .body li { margin: .15em 0; }
@@ -142,31 +141,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #away { flex: 1 1 0; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #away.below { order: 1; flex-basis: 100%; white-space: normal; }
 #btn-send { margin-left: auto; }
-/* Plan usage at the right end of the header. Where it doesn't fit next to the buttons, the assistants' names give way
-   to their dots ("week" becomes "wk"), then the windows' names go too (fitUsage in chat.js); on a row of its own it is
-   whole. */
-#usage { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; background: none;
-  border: 1px solid transparent; border-radius: 7px; padding: 2px 5px; line-height: 18px; color: var(--muted); font-size: 11.5px; }
-#usage:hover, #usage.open { border-color: var(--line); color: var(--ink); }
-#usage .u b { font-weight: 600; }
-#usage .warn { color: #c77c02; }
-#usage .hot { color: var(--warn); font-weight: 600; }
-#usage .u-dot { display: none; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
-#usage .u-dot.claude { background: var(--claude); }
-#usage .u-dot.codex { background: var(--codex); }
-#usage:is([data-form=short], [data-form=shorter]) .u-dot { display: inline-block; }
-#usage:is([data-form=short], [data-form=shorter]) .u-who { display: none; }
-#usage .u-abbr { display: none; }
-#usage[data-form=short] .u-long { display: none; }
-#usage[data-form=short] .u-abbr { display: inline; }
-#usage[data-form=shorter] .u-wl { display: none; }
-#usage .chev { margin-left: -4px; }
 .grow { flex: 1; }
 .primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 4px 14px; font-weight: 600; }
 .primary.stop { background: var(--warn); }
 .primary:disabled { opacity: .45; cursor: default; }
 
-/* popovers: model menu and usage card */
+/* popovers: model menu and history */
 .pop { position: fixed; z-index: 50; width: 330px; max-height: 75vh; overflow-y: auto; background: var(--panel); color: var(--ink);
   border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 8px; font-size: 13px; }
 .pop-title { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 6px 6px 4px; }
@@ -185,27 +165,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .seg button { flex: 1; border: 0; background: none; padding: 4px 0; font-size: 12px; color: var(--muted); }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--user); color: var(--ink); font-weight: 600; }
-.u-sec { padding: 4px 6px 8px; }
-.u-sec + .u-sec { border-top: 1px solid var(--line); padding-top: 8px; }
-.u-name { font-weight: 600; margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
-.u-name.claude { color: var(--claude); }
-.u-name.codex { color: var(--codex); }
-.u-name .plan { font-weight: 500; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; }
-.u-row { margin: 6px 0 8px; }
-.u-top { display: flex; justify-content: space-between; font-size: 12.5px; }
-.u-pct { color: var(--muted); }
-.u-pct.warn { color: #c77c02; }
-.u-pct.hot { color: var(--warn); font-weight: 600; }
-.bar { height: 6px; border-radius: 3px; background: var(--code-bg); margin-top: 4px; overflow: hidden; }
-.bar .fill { height: 100%; background: var(--accent); border-radius: 3px; }
-.bar .fill.warn { background: #e39a1b; }
-.bar .fill.hot { background: var(--warn); }
-.u-reset { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
-.u-err { color: var(--warn); font-size: 11.5px; }
-.u-foot { color: var(--muted); font-size: 11px; margin: 2px 6px 0; }
-.u-hide { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 6px 6px 2px; padding-top: 6px;
-  border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
-.pop .u-hide .link { padding: 0; font-size: 12px; }
 
 .badge { font-size: 10px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 6px; padding: 0 5px; margin-left: 6px; }
 .pop .link { background: none; border: 0; color: var(--accent); font-size: 12.5px; padding: 4px 8px; cursor: pointer; }
@@ -224,7 +183,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .ticks span { cursor: pointer; min-width: 0; }
 .ticks span.on { color: var(--ink); font-weight: 600; }
 
-/* header: view toggle, history, new chat (then Search), together on the left */
+/* header: the view toggle on the left; History, New chat and Search on the right (on a row of their own in a narrow
+   chat) */
+#head-right { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
 #head-actions { display: inline-flex; gap: 6px; align-items: center; }
 #viewseg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 #viewseg button { border: 0; background: none; padding: 2px 8px; font-size: 12px; line-height: 18px; color: var(--muted); }

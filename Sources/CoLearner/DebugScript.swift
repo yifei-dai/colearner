@@ -4,7 +4,8 @@ import WebKit
 
 /// Debug builds only: COLEARNER_SCRIPT drives the app for an end-to-end check without anyone at the keyboard, one
 /// step per ";" — open <address>, pdf <path>, newtab, wait <seconds>, shot <png path>, thumbs, scroll <y>,
-/// goto <heading text>, readtext <txt path>, click <link text>, back, ask <claude|codex|both> <question>, stop, close, quit. `shot` draws the window itself
+/// goto <heading text>, readtext <txt path>, click <link text>, menus <txt path>, menushot <menu> <png path>, back,
+/// ask <claude|codex|both> <question>, stop, close, quit. `shot` draws the window itself
 /// (web views by their own snapshots), so no screen-recording permission is involved.
 @MainActor
 enum DebugScript {
@@ -70,14 +71,42 @@ enum DebugScript {
         case "menus":
             var lines: [String] = []
             func walk(_ m: NSMenu, _ depth: Int) {
+                // As when the menu opens: SwiftUI fills its items in then (until then they can be from launch).
+                m.delegate?.menuNeedsUpdate?(m)
+                m.update()
                 for i in m.items {
                     let keys = i.keyEquivalent.isEmpty ? "" : " [\(i.keyEquivalentModifierMask.rawValue >> 17):\(i.keyEquivalent)]"
-                    lines.append(String(repeating: "  ", count: depth) + (i.isSeparatorItem ? "-" : i.title) + keys + (i.isEnabled ? "" : " (off)"))
+                    lines.append(String(repeating: "  ", count: depth) + (i.isSeparatorItem ? "-" : i.title) + keys + (i.isEnabled ? "" : " (off)")
+                                 + (i.isSectionHeader ? " (header)" : "") + (i.isHidden ? " (hidden)" : ""))
                     if let sub = i.submenu { walk(sub, depth + 1) }
                 }
             }
             if let main = NSApp.mainMenu { walk(main, 0) }
             try? lines.joined(separator: "\n").write(toFile: arg, atomically: true, encoding: .utf8)
+            next()
+        case "menushot":
+            // "menushot Usage <png>": that menu of the menu bar, opened as a pop-up for a moment and drawn from its own
+            // window (no screen recording involved).
+            let p = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            guard p.count == 2, let bar = NSApp.mainMenu?.items.first(where: { $0.title == p[0] })?.submenu,
+                  let view = model.mainWindow?.contentView else { log("no menu \(arg)"); next(); return }
+            bar.delegate?.menuNeedsUpdate?(bar)   // filled in as when it opens
+            let menu = bar.copy() as! NSMenu      // a menu in the menu bar can't also pop up
+            let timer = Timer(timeInterval: 0.8, repeats: false) { _ in
+                MainActor.assumeIsolated {
+                    let names = NSApp.windows.filter(\.isVisible).map { NSStringFromClass(type(of: $0)) }
+                    if let mw = NSApp.windows.first(where: { $0.isVisible && NSStringFromClass(type(of: $0)).contains("Menu") }),
+                       let cv = mw.contentView, let rep = cv.bitmapImageRepForCachingDisplay(in: cv.bounds) {
+                        cv.cacheDisplay(in: cv.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: p[1]))
+                        log("menu window \(NSStringFromClass(type(of: mw))) \(mw.frame)")
+                    } else { log("no menu window among \(names)") }
+                    menu.cancelTracking()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            let shown = menu.popUp(positioning: nil, at: NSPoint(x: 60, y: view.isFlipped ? 60 : view.bounds.height - 60), in: view)
+            log("menu popped up: \(shown)")
             next()
         case "back":
             model.turn(-1)

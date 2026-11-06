@@ -29,7 +29,10 @@ enum UsageFetcher {
             return Result(plan: plan, windows: [], error: "Claude Code did not return usage.")
         }
         let windows = parseClaudeUsage(text)
-        return Result(plan: plan, windows: windows, error: windows.isEmpty ? text.split(separator: "\n").first.map(String.init) : nil)
+        // Now and then /usage comes back with only its first line ("You are currently using your subscription…").
+        let first = text.split(separator: "\n").first.map(String.init)
+        let error = first?.hasPrefix("You are currently using your subscription") == true ? "Claude Code listed no numbers this time" : first
+        return Result(plan: plan, windows: windows, error: windows.isEmpty ? error : nil)
     }
 
     /// Lines like "Current session: 42% used · resets Oct 17 at 8:09pm (America/New_York)".

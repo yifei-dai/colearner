@@ -152,10 +152,10 @@ final class AppModel: ObservableObject {
     @Published var codexFastMode: Bool = UserDefaults.standard.bool(forKey: "codexFastMode") {
         didSet { UserDefaults.standard.set(codexFastMode, forKey: "codexFastMode"); chat.pushConfig() }
     }
-    /// The plan usage at the right of the chat header hidden (View › Hide Plan Usage ⌥⌘U, its card, Settings).
-    @Published var usageHidden: Bool = UserDefaults.standard.bool(forKey: "usageHidden") {
-        didSet { UserDefaults.standard.set(usageHidden, forKey: "usageHidden"); chat.pushUsageHidden() }
-    }
+    /// What the Usage menu in the menu bar shows (ChatController keeps it current): each assistant's plan usage, and
+    /// where signing in again stands.
+    @Published var planUsage: [Provider: PlanUsageEntry] = [:]
+    @Published var signInPhase: [Provider: SignIn.Phase] = [:]
     @Published var selectedStudyPage: [String: String] = [:]   // deck path -> study page path
     @Published var followSlides = true
     /// "system" (follow macOS), "light" or "dark". The chat and study pages follow it too.
