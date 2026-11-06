@@ -201,6 +201,9 @@ final class ChatController: NSObject, WKNavigationDelegate {
         if let plan = u.plan { UserDefaults.standard.set(plan, forKey: "usage.\(p.rawValue).plan") }
     }
 
+    /// Whether the chat header shows the plan usage.
+    func pushUsageHidden() { js("setUsageHidden", model.usageHidden) }
+
     private func pushUsage() {
         var d: [String: Any] = [:]
         for (p, u) in usage {
@@ -580,6 +583,7 @@ final class ChatController: NSObject, WKNavigationDelegate {
             searchResults = []
             showCurrent()
             pushConfig()
+            pushUsageHidden()
             loadUsage()
             pushSignIn()
             refreshModels()
@@ -613,6 +617,8 @@ final class ChatController: NSObject, WKNavigationDelegate {
             refreshModels()
         case "refreshUsage":
             refreshUsage(force: body["force"] as? Bool ?? false)
+        case "setUsageHidden":   // "Hide from the chat header" in the usage card
+            if let hidden = body["hidden"] as? Bool { model.usageHidden = hidden }
         case "setEffort":
             guard let p = Provider(rawValue: body["provider"] as? String ?? ""), let e = body["effort"] as? String else { return }
             if p == .claude { model.claudeEffort = e } else { model.codexEffort = e }

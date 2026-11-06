@@ -336,6 +336,7 @@
   /// it go to a row of its own, as whole as that row allows.
   function fitUsage() {
     const box = $("#usage"), search = $("#btn-search"), head = $("#head");
+    if (box.hidden) return;
     const forms = ["", "short", "shorter"];
     const wrapped = () => box.getBoundingClientRect().top >= search.getBoundingClientRect().bottom - 1;
     const fits = () => box.getBoundingClientRect().right <= head.getBoundingClientRect().right - parseFloat(getComputedStyle(head).paddingRight) + 0.5;
@@ -750,6 +751,12 @@
       popEl.appendChild(sec);
     }
     if (newest) popEl.appendChild(el("div", "u-foot", "Updated " + new Date(newest * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " · also refreshed after every answer"));
+    // Hiding the line here; View › Show Plan Usage (or Settings) brings it back.
+    const hide = el("div", "u-hide");
+    const hb = el("button", "link", "Hide from the chat header");
+    hb.onclick = () => post({ type: "setUsageHidden", hidden: true });
+    hide.append(hb, el("span", "", "View › Show Plan Usage (⌥⌘U) brings it back"));
+    popEl.appendChild(hide);
     placePop(anchor, true);
   }
 
@@ -1264,6 +1271,12 @@
     setUsage(u) {
       usage = u || {};
       renderUsage();
+    },
+    /// The usage line hidden from the header (View › Hide Plan Usage, its card, Settings).
+    setUsageHidden(h) {
+      $("#usage").hidden = h === true;
+      if (h === true && pop && pop.kind === "usage") closePop();
+      fitUsageSoon();
     },
     focusInput() {
       input.focus();

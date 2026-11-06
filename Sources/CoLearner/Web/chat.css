@@ -203,6 +203,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .u-reset { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
 .u-err { color: var(--warn); font-size: 11.5px; }
 .u-foot { color: var(--muted); font-size: 11px; margin: 2px 6px 0; }
+.u-hide { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; margin: 6px 6px 2px; padding-top: 6px;
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.pop .u-hide .link { padding: 0; font-size: 12px; }
 
 .badge { font-size: 10px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 6px; padding: 0 5px; margin-left: 6px; }
 .pop .link { background: none; border: 0; color: var(--accent); font-size: 12.5px; padding: 4px 8px; cursor: pointer; }

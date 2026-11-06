@@ -938,6 +938,39 @@ struct ChatAttachmentUITests {
         try await snapshot(web, "colearner-header-and-bar-720.png")
     }
 
+    /// The usage line hides from the header (the app's View › Hide Plan Usage ⌥⌘U, Settings, or the link in its card)
+    /// and comes back where it was.
+    @Test func thePlanUsageCanBeHiddenAndShownAgain() async throws {
+        let web = ChatWebFixture()
+        defer { #expect(web.javaScriptErrors.isEmpty); web.close() }
+        try await shortChat(web)
+        let usage: [String: Any] = [
+            "claude": ["windows": [["label": "5h", "percent": 1], ["label": "week", "percent": 0]], "updated": 0],
+            "codex": ["windows": [["label": "5h", "percent": 0], ["label": "week", "percent": 7]], "updated": 0]]
+        try await web.call("setUsage", usage)
+        try await web.call("setThread", thread())
+        // The card's link asks the app to hide the line.
+        _ = try await web.evaluate("document.querySelector('#usage').click(); null;")
+        try await web.waitFor("!!document.querySelector('.pop:not([hidden]) .u-hide .link')")
+        try await snapshot(web, "colearner-usage-card.png")
+        web.clearMessages()
+        _ = try await web.evaluate("document.querySelector('.pop .u-hide .link').click(); null;")
+        #expect(try await web.waitForMessage(type: "setUsageHidden")["hidden"] as? Bool == true)
+        // The app's answer hides it and closes the card; the buttons stay where they were.
+        let left = "document.querySelector('#btn-search').getBoundingClientRect().left"
+        let search = try await web.evaluate(left) as? Double
+        try await web.call("setUsageHidden", true)
+        #expect(try await flag("document.querySelector('#usage').getBoundingClientRect().width === 0 && document.querySelector('.pop').hidden", in: web))
+        #expect(try await web.evaluate(left) as? Double == search)
+        // New numbers while it is hidden keep it hidden; shown again, it is back on the header's row.
+        try await web.call("setUsage", usage)
+        #expect(try await flag("document.querySelector('#usage').hidden", in: web))
+        try await web.call("setUsageHidden", false)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await flag("(u => u.width > 0 && u.top < document.querySelector('#btn-search').getBoundingClientRect().bottom)(document.querySelector('#usage').getBoundingClientRect())", in: web))
+        #expect(try await text("#usage", in: web)?.contains("ChatGPT") == true)
+    }
+
     /// With COLEARNER_TEST_SNAPSHOTS set, a picture of the page: in that folder when it names one, else in /tmp.
     private func snapshot(_ web: ChatWebFixture, _ name: String) async throws {
         guard let value = ProcessInfo.processInfo.environment["COLEARNER_TEST_SNAPSHOTS"] else { return }

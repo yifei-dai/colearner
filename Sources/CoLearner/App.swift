@@ -40,6 +40,9 @@ struct CoLearnerApp: App {
                 Button(model.thumbnailsHidden ? "Show Thumbnails" : "Hide Thumbnails") { model.toggleThumbnails() }
                     .keyboardShortcut("t", modifiers: [.command, .option])
                     .disabled(model.document == nil)
+                // The usage line at the right of the chat header.
+                Button(model.usageHidden ? "Show Plan Usage" : "Hide Plan Usage") { model.usageHidden.toggle() }
+                    .keyboardShortcut("u", modifiers: [.command, .option])
                 Divider()
                 // Web tabs: the page's text size, kept per book.
                 Button("Zoom In") { model.zoomWeb(1) }.keyboardShortcut("=", modifiers: .command).disabled(model.web == nil)
@@ -163,6 +166,7 @@ struct SettingsView: View {
                     ForEach(AppModel.appearances, id: \.id) { a in Text(a.label).tag(a.id) }
                 }
                 .pickerStyle(.segmented)
+                Toggle("Plan usage in the chat header (⌥⌘U)", isOn: Binding(get: { !model.usageHidden }, set: { model.usageHidden = !$0 }))
             }
             Section("Files") {
                 LabeledContent("Chats are saved in", value: AppPaths.chats.path)
