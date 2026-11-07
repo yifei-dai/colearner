@@ -3,6 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 tools/make_library.py >/dev/null
+# A personal library (course folders, deck titles, study pages) is written outside the repo, to
+# ~/Library/Application Support/Co-learner/library.json, by an optional git-ignored script; the app reads it first.
+if [ -f tools/make_library.local.py ]; then python3 tools/make_library.local.py >/dev/null; fi
 rm -f .build/release/CoLearner   # so a failed build can't package the previous binary
 swift build -c release 2>&1 | { grep -v "search path .* not found" || true; }
 test -x .build/release/CoLearner
@@ -39,7 +42,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 # Sign with the local certificate when it exists: macOS then keeps the Desktop-folder permission across
 # rebuilds (an ad-hoc signature is a new app to macOS every build, so it asks again).
-# One-time setup: see "Signing" in README.md.
+# One-time setup: see "Signing" in docs/USER_GUIDE.md.
 IDENTITY="Co-learner Local Signing"
 if security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
   if err=$(codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP" 2>&1); then

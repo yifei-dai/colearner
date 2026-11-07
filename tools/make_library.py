@@ -4,7 +4,8 @@ no courses: sections are made on the lecture page (New Section, then + to link a
 
 A personal library (course folders, nicer deck titles, the study pages and notes that belong to each deck) goes in
 ~/Library/Application Support/Co-learner/library.json, which the app reads before the bundled one. Its format is
-LibraryFile in Sources/CoLearner/Library.swift."""
+LibraryFile in Sources/CoLearner/Library.swift. scripts/build_app.sh also runs tools/make_library.local.py when it
+exists: a git-ignored script that writes that personal library."""
 import json, os
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "Sources", "CoLearner", "library.json")
