@@ -1,195 +1,148 @@
+<div align="center">
+
+<img src="Resources/AppIcon.png" width="112" alt="Co-learner app icon">
+
 # Co-learner
 
-A Mac app for reviewing lecture slides with an AI tutor next to them. Version 0.2.1.
+**Study lecture slides with an AI tutor beside them.**
 
-- **Left:** the lecture slides. The bar on top holds the **Shortcuts** menu (your sections' PDFs and web pages) and the open decks as tabs (browser-style: + or ⌘T for a New Tab); the strip at the bottom holds slide thumbnails (hide it with the button next to the slide number, or ⌥⌘T, to give a book chapter or A4 handout the whole height).
-- **Left, in a web tab:** a web page or online book (for example *Interactive Linear Algebra*) instead of a PDF, with Back, Forward, Reload, its address and Open in Browser above it. Links open in the same tab; there is no thumbnail strip.
-- **Right, Chat tab:** one conversation per lecture deck, with Claude, ChatGPT, or Both. Move through the slides and keep asking: the assistants remember the conversation, and each message tells them which slide you're on.
-- **Right, Walkthrough tab:** the walkthrough or review page for this deck, scrolled to the section for the current slide. For decks with typed LaTeX notes it also offers those notes (PDF), opened at the page that shows the current slide.
+A native macOS app that puts your slides, a Claude and ChatGPT chat that knows which slide you are on,<br>
+and your study notes in one window. Turn a slide, and the notes scroll to match.
 
-### How the chat works
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-111111?logo=apple&logoColor=white)
+![SwiftUI + AppKit](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)
+![Version 0.2.1](https://img.shields.io/badge/version-0.2.1-3D5AFE)
+![185 tests](https://img.shields.io/badge/tests-185-2F9E44)
 
-- **What the assistants get.** A new conversation starts with the text of every slide (cheap) and the image of the slide you're on. Afterwards each question is tagged "you're on slide N"; a slide's image is attached the first time it comes up, and so are slides you mention ("compare with slide 3", "slides 5–8"). Claude can also open any slide image itself. Pictures and quoted passages go to whichever assistants you ask; when the other one is asked later, it gets the quoted text and is told which pictures it did not see.
-- **What you see.** The chat's header holds *This slide* / *All* on the left and *History*, *New chat* and *Search* on the right; the deck and slide are on the tab and in the window title, and your plan usage is in the **Usage** menu in the menu bar. *This slide* shows what you asked on the slide on screen; *All* shows the whole conversation with a slide tag on each question (click it to jump). "Also asked on slides" and orange dots on the thumbnails show where you asked before.
-- **Buttons.** *Explain this slide* and *Visualize this slide* are one click for the whole slide. **✂︎ Select area** (or ⌥-drag on the slide, or ⌘⇧A) lets you drag a box over part of a slide like a screenshot; the cut-out goes with your next question, and the buttons become *Explain this area* / *Visualize this area*.
-- **Screenshots and pictures.** Paste a screenshot with ⌘V (⌃⇧⌘4 copies one; ⌘V works in the chat, on a study page, or with the slides in focus; copied text still pastes as text), drop picture files or the screenshot thumbnail on the chat, or click **📎 Screenshot** to pick files (it opens in your screenshot folder). Up to 8 go with your next question, shown above the chat box (× removes one); the buttons become *Explain the screenshot* / *Visualize the screenshot*, and Enter on an empty box means *Explain*. Pictures are scaled to at most 1568 px like slide images, and large photos are sent as JPEG, because every picture in a chat goes out again with each later question. The app reads the clipboard only when you paste, so macOS never asks for clipboard permission. If no answer comes back (each assistant failed, or was stopped before writing anything), the pictures and any quoted passage go back into the chat box, so you can ask again. In a short window, what waits above the chat box scrolls, so the conversation stays in view.
-- **Asking about the walkthrough.** Select text on a walkthrough page and click **Ask about this**, or use **Ask** in the Walkthrough tab's bar (⇧⌘L): the selected text, or else the section you are reading, goes to the chat as a quoted passage (math keeps its TeX, also in section names; the page's own TeX macros such as `\tp` are defined at the end; answer choices are kept, and a checkpoint you answered says what you picked or typed and how the page marked it; pseudocode keeps its line numbers and indentation; a long section is quoted from the part on screen). Selecting just an equation works too; a drag inside a diagram is not a selection. In a notes PDF, Ask sends the selected text while it is on screen, or else the page on screen as a picture. The **crop** button (⌥⇧⌘A, or ⌥-drag on the walkthrough) captures a box of the walkthrough as a picture. The passage or capture goes with your next question and the buttons become *Explain this passage* / *Visualize this passage*. The assistants are told it comes from a study page written from the slides; if the two disagree, they say so and work out which is right (study pages list checked slide errata, and the notes record corrections made in class). Asked from the Chat tab (⇧⌘L), Ask first brings up the walkthrough at the current slide, so you see what you are asking about.
-- **Reply to part of an answer.** Select part of an assistant's answer (a triple-click takes one paragraph or list item) and click **↩︎ Reply**: that part (formulas as TeX) is quoted in the chat box for your next question; the buttons become *Explain this part* / *Visualize this part*. The assistant that wrote it is told it is its own earlier answer; the other one is told whose it is. The quote stays through *New chat* and *History*; asked in another chat, the assistant is told it comes from an earlier chat about this deck.
-- **New chat / History.** *New chat* starts a fresh conversation about the deck (long ones get slower and use more of your limits); *History* switches between earlier ones or deletes them. Chats from before v0.1.5 (one per slide) were gathered into one conversation marked "per-slide chats"; the old per-slide file `<name>-<hash>.json` is left unchanged (older versions still read it), and the new conversations are saved in `<name>-<hash>.chat2.json`.
-- Claude and ChatGPT share the conversation: each is shown what the other said that it hasn't seen yet. Each assistant is only "busy" for itself.
-- **Search.** *Search* (⇧⌘F) finds text across saved conversations in every deck, including closed decks and older per-slide chats. Words match regardless of case or accents; results show the deck, slide and matching excerpt, newest first (up to 100). Click a result to reopen its conversation and slide and highlight the message in *All*. Searching does not alter saved chats. A moved or missing PDF must be restored before its result can open.
-- **In a web tab.** One conversation per web book (a site and its first folder, such as `textbooks.math.gatech.edu/ila/`), across every page you read in that tab, as one chat covers a deck. When you ask, the page is read first (the answer says “reading the page…”, usually well under a second): each assistant gets the book's name once, a page's text the first time you ask on that page (headings, lists, tables, math as TeX where the page keeps it: KaTeX, MathJax 2 and 3; collapsed PreTeXt examples and proofs are included under their numbered titles, fetched from the same site), and a picture of what is on screen with the text on screen whenever that part of the page changed since the last picture it got. Every question says which page and section you are on and how far down. ✂︎ Select area works on the page, and *Explain what's shown* / *Visualize what's shown* replace the slide buttons. *This page* / *All*, the “also asked on pages” chips and the tags on questions use the pages' titles; clicking one goes back to that page. The assistants are told the page is reference material, not instructions, and neither has tools in a web tab (nothing on a web page can make one open a file, look at a picture on disk or reach an app). A page counts once it has replaced the one before (so it never takes the last page's title), keeps its number for good, and its title is settled in its first seconds on screen.
-- **Slide references.** References such as “slide 12” or “slides 3 and 5” in an assistant's answer are clickable when they name valid app slide numbers. Clicking one opens that slide while keeping the answer visible in *All*. Range endpoints are clickable; code, equations and existing web links are left alone. References use the app's numbering, which may differ from printed slide footers.
+</div>
 
-## Using it
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+  <img alt="Co-learner: a lecture slide about the Direct Linear Transform on the left; on the right, Claude explains with rendered math why the last column of V minimizes the norm of Ah" src="docs/images/hero-light.png">
+</picture>
 
-| Action | How |
-|---|---|
-| Open a lecture | **Shortcuts** menu (top left) or the lecture page in a New Tab (click a PDF; the page fills the window, and Chat and Walkthrough come back with the lecture, or with ⌘1, ⌘2 or ⇧⌘F). Any other PDF: ⌘O (it goes into *Other PDFs* unless a section lists it already). Decks show their real file names everywhere (page, menu, tabs, window title) |
-| Organize the lecture page | The page is a list of **sections** (none on a new install; one per course when a personal library.json lists courses). **New Section** makes one (name it in place; it can stay empty). A section's **+** links **folders** (their PDFs and subfolders show as they are on disk, real names, Finder's order; click a folder to open it) or single **PDFs**; you can also drop PDFs and folders from Finder onto a section. **⋯** or right-click: rename or remove a section (nothing on disk changes), unlink a folder, remove a PDF from a section, **Hide from Section**, Show in Finder. Click a heading to fold a section. Drag a PDF or folder onto another section to **move** it there (hold ⌥ to keep it in both; one from a linked folder is then hidden in its old section, under *Hidden (n)*, where right-click › **Show in Section Again** brings it back). Drag headings, and the items linked to a section, up and down to reorder them. The page notices changes in Finder by itself (also when you come back to the app); **Refresh** reads everything again |
-| Rename a PDF | right-click it › **Rename File…**, type, Return (Esc cancels): the file is renamed on disk. A rename or move in Finder works too: chats, the slide you were on, open tabs, walkthrough links and notes all follow the file (also when a whole linked folder or a subfolder is renamed or moved) |
-| Tabs | **+** after the tabs or ⌘T opens a New Tab with the lecture list; picking a lecture there opens it in that tab. Click a tab to switch; × or ⌘W closes the tab on screen. Each deck remembers its slide |
-| Next / previous slide | → / ← (anywhere, except while typing in the chat box or using a visual or slider), ⌘] / ⌘[ , or click a thumbnail |
-| Hide or show the thumbnails | the strip button right of the slide number, or View › Hide Thumbnails (⌥⌘T). Remembered apart for portrait pages (book chapters, A4 handouts) and landscape slides, so hiding it for a book keeps it for lecture slides |
-| Open a web page | **Open a Web Page…** on the lecture page, in the Shortcuts menu or File › (⇧⌘O): type or paste the address. It opens in a tab with the chat next to it and goes into *Web Pages* unless a section links that book already. A section's **+** › **Link Web Page…** adds one to that section; right-click a web link for Open in Browser, Rename… (on the page only) or Remove from Section |
-| In a web tab | Back / Forward with the arrows above the page, ⌘[ / ⌘] or a two-finger swipe; ← → and the space bar belong to the page. Text size: View › Zoom In / Zoom Out / Actual Size (⌘+ ⌘- ⌘0) or pinch, kept per book. Sites remember sign-ins like a browser. Links to other apps (mailto:, zoommtg:…) and downloads ask first, then go to that app or your browser. The tab comes back at the next launch with its history and place |
-| Ask | type and press Enter (Shift+Enter for a new line), or *Explain this slide* / *Visualize this slide*. Esc leaves the chat box (so ← → turn slides again) |
-| Ask about part of a slide | **✂︎ Select area** under the chat, ⌥-drag on the slide, or ⌘⇧A; drag a box; Esc cancels. The buttons become *Explain this area* / *Visualize this area* |
-| Ask about a screenshot or picture | ⌘V a copied screenshot (⌃⇧⌘4), drop picture files on the chat, or **📎 Screenshot** under the chat. × on a picture removes it |
-| Ask about the walkthrough | select text on the page and click **Ask about this**; or **Ask** in the Walkthrough bar (⇧⌘L) for the selection or the section you are reading (notes PDFs: the selection or the page); or the crop button (⌥⇧⌘A, ⌥-drag on the page) for a box of it; Esc cancels |
-| Ask about part of an answer | select it and click **↩︎ Reply** |
-| See the conversation | *This slide* / *All* at the top of the chat; *History* for earlier chats; *New chat* for a fresh one |
-| Find an earlier answer | **Search** at the top of the chat, or ⇧⌘F; type words and click a result to open its deck, conversation and slide |
-| Follow a slide reference | click an underlined slide number in an assistant's answer |
-| Model and effort | click the model button next to Claude / ChatGPT / Both (e.g. "● Opus 5.5 Medium ⌄"): pick a model and slide the effort (also in Settings ⌘,). **Choose models…** picks which models the menu shows; new models appear by themselves (marked *New* for a week). ChatGPT also has a **Fast mode** toggle; the selector and answers show *Fast* when enabled. Each answer is labelled with the model and effort it used |
-| Claude or ChatGPT signed out | when a login expires, the failed answer shows **Sign in to Claude** (or **Sign in to ChatGPT**). It opens Terminal with that tool's own sign-in and your browser shows the Authorize page: click **Authorize** (paste a code into Terminal only if the page shows one). Co-learner notices when it's done, comes back to the front and offers **Ask again**. The same sign-in is in the Co-learner menu (**Sign In to Claude…**, **Sign In to ChatGPT…**), in Settings, and in the **Usage** menu when a tool reports it is signed out |
-| A failed answer | **Ask again** under the newest failed answer of each assistant asks it the same question on the same slide, with what the chat box holds now (pictures and a quote from an unanswered question come back there). A question about a selected area needs the area selected again first |
-| Plan usage | the **Usage** menu in the menu bar: for Claude and ChatGPT your plan and each window (how much is used and when it resets: a time today, else a day and time), when the numbers were fetched, and **Refresh**; **Sign In to …** when a tool reports it is signed out. The numbers are fetched again when you open the menu bar (at most every 2 minutes) and after every answer |
-| Link / unlink a walkthrough or notes PDF | Walkthrough tab › 🔗 menu: **Link a walkthrough page or notes PDF…**, **Unlink "…"** for each page, **Link again** for pages you unlinked. A page you link syncs to the slides right away (HTML pages through their slide references, notes PDFs through their slide stamps). Unlinked pages stay out even if they are found again; unlinking a notes PDF also stops Claude reading its .tex |
-| Light / Dark / Automatic | the ☀︎ / ☾ button at the right of the top bar, View › Appearance, or Settings |
-| Jump to the chat box | ⌘L |
-| Chat / Walkthrough tab | ⌘1 / ⌘2 |
-| Pop out Chat or Walkthrough (e.g. onto an iPad as a second screen) | the ⧉ button at the right of the panel header, or Slides › Pop Out Chat (⌥⌘1) / Pop Out Walkthrough (⌥⌘2). The first time, a pop-out goes to another screen if one is connected (both share it, Chat on the left); after that each window remembers where it was. With both out, the slides fill the window. **Put back** in the window's title bar, its close button or ⌘W docks it again; pop-outs left open come back at the next launch |
-| Slides / right panel width | opens at 3 : 2 every launch; drag the divider, double-click it to go back to 3 : 2 |
-| Stop an answer | the red **Stop** button (stops answers still running in this chat, on any slide; one running on another slide is named next to Stop, or under it when the bar has no room) |
-| Visuals | "Visualize" answers come with a live interactive drawing; **Open in window** shows it bigger; **Code** shows the source |
+## Why I built it
 
-## First launch
+Reviewing a lecture used to mean the slides on an iPad, ChatGPT in one browser tab, Claude in another, and a long study guide on a second screen. Every question started with "on slide 14, ...". Co-learner keeps all of it in one window: the assistants always know which slide you are looking at, and so do your notes.
 
-If a linked folder is on your Desktop, macOS asks once whether Co-learner may access files there. Click **Allow**.
+## What it does
 
-**Signing.** `scripts/build_app.sh` signs the app with a private certificate, "Co-learner Local Signing", kept in the login keychain of this Mac. macOS remembers the Desktop permission by the bundle ID (`com.yifeidai.colearner`) plus that certificate, so it survives rebuilds and renaming the app. Without the certificate the script signs ad-hoc, and macOS asks again after every rebuild. To recreate the certificate on another Mac: make a self-signed certificate with the Code Signing extended key usage named exactly "Co-learner Local Signing" (Keychain Access › Certificate Assistant › Create a Certificate, type Code Signing, or openssl + `security import … -T /usr/bin/codesign`); no trust change is needed.
+<img src="docs/images/demo.gif" alt="Turning from slide 6 to slide 8 scrolls the walkthrough to the matching section; then a question about RANSAC is typed and Claude's answer streams in" width="100%">
 
-## How it talks to Claude and ChatGPT
+<sub>Turning the slides scrolls the walkthrough to the matching section. Then a question about slide 8, answered live by Claude (the GIF runs faster than real time).</sub>
 
-No API keys. The app runs the command-line tools that are already logged in on this Mac:
+### Ask about the slide you are on
 
-- **Claude:** Claude Code in headless mode (`claude -p`, streamed JSON). The app picks the newest copy it can find, including the one the Claude desktop app keeps up to date. Opus 5.5 needs Claude Code 2.1.280 or newer. It runs with its own system prompt, no MCP servers, no settings or memory files, and read-only tools (Read, Grep, Glob). It is told which files belong to the deck (walkthrough page, typed lecture notes `.tex`, lecture transcripts) and reads them when a question needs more than the slide; deny rules keep it out of the handwritten scans (`*inclass*`, `*_scribing_*.pdf`).
-- **ChatGPT:** the Codex CLI (`codex exec --json`), using the ChatGPT login, read-only sandbox, shell tools and web search off. Default model `gpt-6-astra`, reasoning effort medium. **Fast mode** in the model selector or Settings requests faster processing with the same model and effort, using plan limits faster. It is off by default, remembered between launches, and applies to the next question, including follow-ups in an existing chat. The CLI is explicitly given `service_tier=fast` or `service_tier=default` so switching it off also restores standard speed on resumed chats. See [Codex speed settings](https://learn.chatgpt.com/docs/agent-configuration/speed).
+- **One conversation per lecture.** The assistants get the deck's text up front and each slide's picture the first time it comes up. Every question says which slide you are on, and slides you mention ("compare with slide 3") go along with it.
+- **Explain** or **Visualize** in one click. A Visualize answer arrives as a live, interactive diagram inside the chat.
+- **Point at exactly what you mean:** drag a box over part of a slide, paste a screenshot with ⌘V, select a passage in your notes, or quote part of an earlier answer with **Reply**.
+- **Claude, ChatGPT, or Both.** The two share the conversation, so each sees what the other said. Model and effort are picked per assistant.
+- Math renders with KaTeX, and "slide 7" in an answer is a link that takes you there.
 
-Each conversation (one per deck) keeps one Claude session and one Codex thread, resumed for follow-ups. In a web tab Claude runs with `--tools ""` and no readable folders, Codex with its image, app, plugin, browser, computer-use, memory, sub-agent and image-generation tools off (`-c features.<name>=false`, which a Codex without one of them ignores), and both get the tutor instructions for web pages (`Prompts.webTutor`).
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/visual-panel.png" alt="Visualize this slide: an interactive chart of RANSAC rounds against the inlier fraction, drawn by Claude in the chat"></td>
+    <td width="50%"><img src="docs/images/area-panel.png" alt="Explain this area: a box cut from the slide's matrix equation is attached to the question, and Claude explains each symbol"></td>
+  </tr>
+  <tr>
+    <td><sub><b>Visualize this slide.</b> Claude wrote an interactive demo of how many RANSAC rounds you need.</sub></td>
+    <td><sub><b>Explain this area.</b> Only the matrix equation was boxed and sent with the question.</sub></td>
+  </tr>
+</table>
 
-**Sign-in.** Both tools use their own logins (Claude Code's in the login keychain, Codex's in `~/.codex`). When one expires, *Sign in* writes a small script to `~/Library/Application Support/Co-learner/sign-in/` and opens it in Terminal: `claude auth login --claudeai` (with any Anthropic API key variables unset, using the same `claude` copy the app runs) or `codex login`. The script records the login's exit status in that folder; Co-learner checks for it once a second (for up to 20 minutes), then confirms with `claude auth status` / `codex login status` and marks the assistant signed in.
+### Notes that follow the slides
 
-## Files
+- The **Walkthrough** tab shows your study page for the deck and scrolls to the section about the slide on screen.
+- Typed **LaTeX lecture notes** open at the page that shows the current slide. The match comes from the page stamps pdfTeX writes into every slide a document includes, so no table has to be kept by hand.
+- **Ask about this:** select a passage in the notes and send it to the chat as a quote (its math stays TeX).
 
-| What | Where |
-|---|---|
-| Chats (`<name>-<hash>.chat2.json` per deck; `<name>-<hash>.json` is the pre-0.1.5 per-slide file, left as it was) | `~/Library/Application Support/Co-learner/chats/` |
-| Links you add with the 🔗 button | `~/Library/Application Support/Co-learner/links.json` |
-| The lecture page's sections (linked folders and PDFs as paths and bookmarks, hidden files, open folders) | `~/Library/Application Support/Co-learner/sections.json` |
-| PDFs the page has listed (bookmark, inode and size, so renamed or moved ones are found again; the first path of each) | `~/Library/Application Support/Co-learner/files.json` |
-| Web books: their pages by number and title, the last page, text size | `~/Library/Application Support/Co-learner/webbooks.json` |
-| Each web tab's history and place (WebKit's own record) | `~/Library/Application Support/Co-learner/web-tabs/<hash>.state` |
-| Your own library override (optional) | `~/Library/Application Support/Co-learner/library.json` |
-| Rendered slide images sent to the assistants | `~/Library/Caches/Co-learner/slides/` |
-| Pictures and slide areas sent with questions (removed after a week) | `~/Library/Caches/Co-learner/attachments/`, `…/areas/` |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/walk-dark.png">
+  <img alt="The Walkthrough tab next to slide 8: the study page has scrolled to its RANSAC section, with an interactive calculator for the number of rounds" src="docs/images/walk-light.png">
+</picture>
 
-## The library
+### A library that keeps up with Finder
 
-**What is listed** is up to the sections (`sections.json`, made the first time from library.json: one section per course linked to its slide folder, decks library.json hides stay hidden, and *Other PDFs* with the PDFs opened by ⌘O before). A linked folder is read recursively (folders first, then PDFs, in Finder's name order; hidden files, packages and folders without PDFs are left out). A `LibraryWatcher` (FSEvents) reads the folders again when a PDF or folder in them changes, and so does coming back to the app and **Refresh** (⇧⌘R).
+- Lectures live in **sections** of linked folders and single PDFs, shown as they are on disk. Drag between sections, reorder, and rename files from the app.
+- **Rename or move a PDF in Finder** and its chats, its place, its tabs and its notes follow it (file IDs, bookmarks and FSEvents).
+- **Web tabs** open online textbooks, with a chat of their own that reads the page you are on. **Search** finds any answer in any chat (⇧⌘F).
+- Pop the chat or the notes out to a second screen, such as an iPad with Sidecar.
 
-**What a deck is** comes from `tools/make_library.py`, which writes `Sources/CoLearner/library.json`: each course's folder, slide folder(s) and study folders, and per deck the walkthrough/review pages and notes that belong to it, frames and other settings. A deck takes its course from the course folder it is in (so a PDF in another section still gets its course, its study pages and, inside the course's slide folder, its 2-up split). Its name is always the real file name; library.json's nicer titles are only used to match study pages (and a course's "Lecture N" files to their topics).
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/library-dark.png">
+  <img alt="The lecture page: sections for Computer Vision, Robotics and Machine Learning, each linked to a folder of lecture PDFs" src="docs/images/library-light.png">
+</picture>
 
-**Renames and moves.** `FileTracker` remembers every listed PDF (bookmark, inode and size). When one is no longer where it was, the same file is looked for among the listed PDFs (same inode and size: also a change of capitals only), then by its bookmark (a PDF moved out of the linked folders; never into the Trash). Linked folders and PDFs are followed by their bookmarks. Everything kept by a PDF's path then moves along: its chat files (renamed, with the deck path inside them patched; a running answer still lands in the right chat), links.json, the slide each deck was on, the open tabs, and the sections. library.json keeps knowing the deck by its first path (an alias), and scribe notes and walkthrough pages keep matching it by its first file name.
+## How it works
 
-New things are found on their own (at launch, when Finder changes a linked folder, or with ⇧⌘R):
-- **New slide PDFs** in a linked folder (at any depth).
-- **New notes PDFs** in a study folder (e.g. `notes/L06_notes.pdf`): matched exactly through the deck name and slide number pdfTeX stamps on every slide crop; a `.tex` with the same name is offered to Claude.
-- **New walkthrough/review pages** in a study folder (`output/walkthrough`, `output/quiz-review`, `output/mindmap`): matched by the deck codes on the page ("decks 03a and 03b", "W7L1"), "Lecture N", or the title's words against the deck titles. Checked on the author's library at the time: discovery alone found all 29 links, with nothing missing or extra.
-- **Web pages** are linked to sections by address: in sections.json a web link is a `"file"` item whose path is its address (so 0.2, which knows only folders and PDFs, still reads the file and shows it as a file it can't find), with the page's title once it has been open, or your own name for it. FileTracker and the FSEvents watcher leave them alone.
-- Anything else: the 🔗 menu in the Walkthrough tab links a page by hand, and unlinks any page (listed, found, or linked) for that deck. Hand links and unlinks live in `links.json`.
+```mermaid
+flowchart LR
+    subgraph app["Co-learner.app (SwiftUI + AppKit)"]
+        direction TB
+        slides["Slides<br/>PDFKit"]
+        notes["Walkthrough and notes<br/>WKWebView, PDFKit"]
+        ask["Question builder<br/>slide text and pictures,<br/>areas, screenshots, quotes"]
+        chat["Chat page<br/>WKWebView with marked,<br/>KaTeX and DOMPurify"]
+        slides --> ask
+        notes --> ask
+        ask --> run["CLI runners<br/>streamed JSON events"]
+        run --> chat
+    end
+    run <-->|"claude -p --output-format stream-json"| cc["Claude Code"]
+    run <-->|"codex exec --json"| cx["Codex CLI"]
+```
 
-- Courses whose library.json `layout` is `twoUp` (handouts with two slides per page): the app splits those PDFs so that slide numbers match the printed ones. `FrameDetector.swift` measures where the two slides sit in each deck when it opens (it votes over the first pages; the slide is a block of columns with one long dark run, or its border lines when the slide is light), so a new deck with a slightly different layout is still cut at the slide borders. library.json's frames are only the fallback. Checked on 10 two-up decks: every page agreed with the detected frames.
-- A replaced deck: library.json can hide the old deck (`"hidden": true`) and keep its walkthrough linked to the new deck through a page map (`map`).
-- Walkthrough sections are found by `Web/walkthrough_index.js`, which reads the slide references in each page (eyebrows, headings, `data-pages`, source pills) and scrolls to the most specific section for the slide.
-- Scribe-notes PDFs need no table: pdfTeX stamps each slide crop with its deck file and page (`/PTEX.FileName`, `/PTEX.PageNumber`), and `ScribeMap.swift` reads those.
+Co-learner has no API keys and no server. It runs the Claude Code and Codex command-line tools that are already signed in on your Mac, streams their JSON events into the chat page, and resumes the same Claude session and Codex thread for every follow-up in a conversation. So answers count against your own Claude and ChatGPT plans, and the app's live **Usage** menu shows how much of each plan window is left.
 
-## Building
+## Install
 
-Needs only the Command Line Tools (no Xcode):
+You need:
+
+- macOS 14 or later (developed and tested on macOS 27) and the Command Line Tools (`xcode-select --install`). Xcode itself is not needed.
+- [Claude Code](https://github.com/anthropics/claude-code), the [Codex CLI](https://github.com/openai/codex), or both, installed and signed in.
 
 ```bash
+git clone https://github.com/yifei-dai/colearner.git
+cd colearner
 scripts/build_app.sh --install
 ```
 
-This builds `build/app.noindex/Co-learner.app` and copies it to `~/Applications` (Spotlight skips `.noindex` folders, so a search finds only the installed copy). Its Info.plist allows plain-http pages in web tabs (`NSAllowsArbitraryLoadsInWebContent`). For a quick debug run: `swift run`.
+This builds `Co-learner.app` and copies it to `~/Applications`. Open it, click **New Section**, then **+** to link a folder of lecture PDFs. If an assistant's login expires, the failed answer offers **Sign in**, which runs that tool's own sign-in in Terminal.
 
-**Scripted runs (debug builds only).** `COLEARNER_SCRIPT` drives a debug build without anyone at the keyboard, steps separated by `;`: `open <address>`, `pdf <path>`, `newtab`, `wait <s>`, `shot <png>`, `thumbs`, `scroll <y>`, `goto <heading text>`, `readtext <txt>`, `click <link text>`, `menus <txt>` (the menu bar's items as text, filled in as when they open), `menushot <menu> <png>` (a picture of one menu of the menu bar), `back`, `ask <claude|codex|both> <question>`, `stop`, `close`, `quit`. `shot` draws the window itself (web views by their own snapshots), so no screen-recording permission is needed; PDF pages shown after a deck switch come out blank in it (also in 0.2), so check those on screen. `COLEARNER_LOG_PROMPTS=<folder>` writes every request to an assistant there (prompt, pictures, tools). Use a scratch `COLEARNER_SUPPORT_DIR`; a bare debug binary keeps its settings in the `CoLearner` defaults domain, apart from the installed app's.
+## Shortcuts
 
-Note: SwiftUI's `@State` is a macro in the macOS 27 SDK and its plugin ships only with Xcode, so the code avoids `@State`.
-
-## Testing
-
-Run `scripts/test.sh` on macOS with the Command Line Tools. The Swift Testing suite uses temporary chats and PDFs, fake CLI executables, and a nonpersistent WebKit fixture. It never sends questions to a live AI service or changes your saved chats. XCTest and Xcode are not required. To run one suite, for example: `scripts/test.sh --filter ChatContextTests`. A run passes only with Swift Testing's closing "Test run with N tests … passed" line: a test that scrolls through AppKit with pixel-unit wheel events can end the run early while it still exits 0, so the script fails a run without that line (its output is kept in `.build/test-cache/last-run.log`).
-
-Version 0.2.1 has 185 tests in 20 suites (UsageMenuTests and a chat-header test added on 2026-11-06; 0.2 had 167 in 18), two of them opt-in: one opens Terminal for real with a fake login (`COLEARNER_LIVE_SIGNIN=1 scripts/test.sh --filter liveTerminalSignInIsNoticed`), the other saves pictures of the lecture page, from your real course folders (read only) and from a small test library, in light and dark (`COLEARNER_TEST_SNAPSHOTS=<folder> scripts/test.sh --filter snapshots`). Web tab coverage (WebBookTests) runs the page reader in a real nonpersistent WebKit view on fixture pages served as if from a web address, and on a local Python web server for pages that load more from their own site: page text with math as TeX (KaTeX, MathJax 2, MathJax 3 records), headings made of spans, lists, tables, pictures, `display: contents` wrappers, page chrome and hidden parts left out, the book's name, collapsed PreTeXt examples and proofs (fetched, or kept hidden in the page; inline references stay inline; never the page itself), the section and text on screen, pictures of the view and of an area, the reader's own content world, a page never taking the last page's title, the view key, addresses and books, numbered pages saved and read back, what the assistants are told (escaping, notes, page labels in earlier messages), the chat page in web mode, and web links in sections (also read by 0.2's format), on the lecture page included. Library coverage: linking, hiding and dragging between sections (move, ⌥ copy, reorder, sections), what a linked folder shows (real names, subfolders, Finder order, what is left out), the first sections made from library.json, course settings by folder (2-up only in the slide folders), renames and moves found again by inode or bookmark (also a change of capitals, swapped names, a renamed subfolder, a linked folder renamed, the Trash, Finder's Keep Both, a new file where the old one was), chat files following (also onto a path that already had chats, with either side open this session, findable by Search, nothing left following the old path), links and per-deck settings following, sessions kept across the new names, the FSEvents watcher, and the page itself: clicks, menus, drops of rows, headings and Finder files (also under the last row), renaming in place, a reload while a name is typed, folders reopening as left, and one highlighted row (and heading button) under the pointer. Sign-in coverage checks which errors count as an expired login, the Terminal script run against fake tools (paths with spaces and quotes, no API key reaching Claude's login, the exit status recorded), and on the chat page: Sign in, the waiting and signed-in states, Ask again, area questions, newer answers taking the buttons away, and the Usage menu's sign-in. Version 0.1.9 had 125 tests in 14 suites (0.1.8 had 47 in nine). Screenshot coverage checks scaling to 1568 px, upright photos, JPEG for large photos, what a paste attaches (pictures, text, copied files), drops in order, the chat box at narrow widths and in short windows, keyboard focus on the × buttons, pictures and quotes saved with the question, and pictures coming back only when no answer does. Walkthrough Ask runs the injected scripts in WebKit on fixture pages built like the real study pages: TeX from MathJax and KaTeX, section paths, the button's placement and dismissal, answer choices and checked answers, line numbers, figures, scrolling and page macros. The notes tests use a generated notes PDF for selections on and off screen and for scrolling under the crop layer. Reply tests use real mouse triple-clicks and drags on rendered answers with lists and formulas. Fast mode coverage checks CLI tiers for new and resumed chats, selector on/off messages, keyboard focus, streaming redraws, and narrow-panel layout. Search coverage includes unopened decks, legacy migration and deleted-chat handling, unsaved messages, matching and result limits, stale replies, failed-open retries, and revealing the selected message. Slide-reference tests exercise the actual sanitized chat renderer, click messages, bounds and deck/conversation validation, streamed updates, and preservation of code, equations and web links. Both interfaces are checked at a 420px panel width. The chat header is checked at 820, 588, 420 and 340 px (the view toggle on the left, History, New chat and Search together on the right, all one height; a row of their own at 340 px; History opening under its button), with the note about an answer on another slide next to Stop or under the bar. UsageMenuTests checks what the Usage menu says: each window and when it resets (a time today, else a day and time), checking, a refresh that failed, nothing yet, and signing in again. Set `COLEARNER_TEST_SNAPSHOTS=1` when running the suite to save search and citation previews under `/tmp/colearner-v017-*.png` the Fast mode preview at `/tmp/colearner-v018-fast-mode.png`, and the chat box with pictures and a quote at `/tmp/colearner-v019-attachments.png`; the header test saves `colearner-header-588.png` and `colearner-header-and-bar-720.png` in the folder `COLEARNER_TEST_SNAPSHOTS` names (or in `/tmp`).
-
-## Reliability review (2026-10-18)
-
-The six findings below are fixed and covered by regression tests:
-
-| Finding | Fix and regression coverage |
+| | |
 |---|---|
-| A partial ChatGPT answer could be marked successful after a failed CLI exit. | Require `turn.completed`; preserve partial text and report incomplete turns. Backend tests cover clean/error exits, explicit errors, retries, and cancellation before/after completion. |
-| Crash recovery retained context markers for turns the assistant might never have received. | Clear the interrupted provider's session and seen markers, preserving messages and the other provider. Recovery tests reopen real saved chat files and verify the repaired state persists. |
-| Replaced slides and linked/unlinked notes did not refresh existing assistant sessions. | Persist a source revision per provider; changed sources cancel affected runs and rebuild context on the next question. Reload changed PDFs and invalidate slide-image/thumbnail caches. Tests cover saved sessions, revisions with restored timestamps, link/unlink/edit operations, and unchanged-source resumes. Older unversioned sessions refresh once; chat history is retained. |
-| Rebuilt notes PDFs retained outdated slide-to-page maps and displayed pages. | Version both the mapping cache and the displayed PDF. Real PDF fixtures cover replacement, shared notes, newly referenced decks, deletion, incomplete builds, and recovery. Use **Reload library** after rebuilding notes. |
-| Walkthrough arrow handling also turned slides while operating interactive visuals. | Let widgets handle keys first; respect handled events and focusable visuals. Execute the actual injected JavaScript against widget and ordinary-page key cases. |
-| A delayed walkthrough scroll could run after switching decks or pages. | Cancel queued work and reject callbacks from older selections/navigation. Controller tests cover page switches, shared HTML with different deck metadata, clearing, and disabling Follow slides. |
+| Next or previous slide | → ← |
+| Ask | Return (Shift-Return for a new line) |
+| Ask about part of a slide | ✂︎ Select area, ⌥-drag on the slide, or ⇧⌘A |
+| Ask about a screenshot | ⌘V in the chat, or drop picture files on it |
+| Ask about the notes | select text, then **Ask about this**, or ⇧⌘L |
+| Chat or Walkthrough tab | ⌘1, ⌘2 |
+| Pop out Chat or Walkthrough | ⌥⌘1, ⌥⌘2 |
+| New tab with the lecture list | ⌘T |
+| Search all chats | ⇧⌘F |
 
-Verified on 2026-10-18: all 23 tests across four suites passed, and the optimized release build succeeded. These tests exercise local protocol and UI behavior with controlled fixtures; live Claude/ChatGPT service availability is outside their scope.
+The [user guide](docs/USER_GUIDE.md) covers everything else.
 
-## Layout
+## Privacy and safety
 
-| File | Role |
-|---|---|
-| `App.swift` | app entry, menus, Settings |
-| `AppModel.swift` | open decks, current slide, 2-up splitting, thumbnails |
-| `MainView.swift` | window layout, lecture bar, right panel |
-| `Panels.swift` | the slides / right-panel split (3 : 2), hosting the shared panel views, Chat / Walkthrough pop-out windows |
-| `HoverStyles.swift` | hover highlights for the tab bar's small buttons and menus |
-| `SlidesView.swift` | PDFKit slide view and thumbnail strip |
-| `ChatController.swift` | chat web view bridge, sending, streaming, stop |
-| `Backends.swift` | Claude Code and Codex runners and their JSON parsers |
-| `ProcessRunner.swift` | child processes and line-by-line output |
-| `SlideContext.swift` | slide and area images, the deck header a new conversation gets, the note and quoted passage before each question, slide numbers mentioned in a question; `WebContext`, the same for web tabs |
-| `Attachments.swift` | screenshots and other pictures for the chat: decoding, scaling, what a paste attaches, the screenshot folder; `PasteWebView` (paste of a picture in the chat page or a study page) |
-| `ChatStore.swift` | conversations per deck on disk (and the v1 → v2 migration); chat files follow a renamed or moved PDF |
-| `Library.swift` | library.json (courses and deck notes), the decks for what the sections list, links.json |
-| `Sections.swift` | the lecture page's sections (`sections.json`): linking, hiding, what a drag does, reading linked folders |
-| `LibraryPage.swift` | the lecture page itself (an `NSOutlineView`): clicks, menus, renaming in place, dragging and Finder drops |
-| `FileTracker.swift` | finding renamed or moved PDFs and linked folders again (`files.json`), and the FSEvents watcher |
-| `ChatSearch.swift`, `ChatNavigation.swift` | read-only search of saved chats, result resolution and slide-link validation |
-| `WalkthroughPane.swift` | walkthrough tab (html pages) |
-| `StudyPDF.swift`, `ScribeMap.swift` | notes PDFs in the walkthrough tab, slide → notes page |
-| `StudyDiscovery.swift` | finds study pages and notes made later and matches them to decks |
-| `Prompts.swift` | the tutor instructions (slides; web pages) |
-| `WebBook.swift` | web tabs: what an address means and which book it is in, webbooks.json, the tab's web view (navigation, reading the page, pictures of it), the bar above it, Open a Web Page… |
-| `DebugScript.swift` | debug builds only: scripted runs and request logs (see Building) |
-| `ModelCatalog.swift` | live model lists (Claude Code / Codex), shown/hidden models, effort levels; usage windows |
-| `UsageFetcher.swift` | on-demand plan usage (Claude `/usage`, Codex app-server) |
-| `UsageMenu.swift` | what the Usage menu says (plans, windows and reset times, sign-in), from the usage ChatController keeps |
-| `SignIn.swift` | signing Claude Code / Codex in again: the Terminal script, noticing it finished, checking the login |
-| `FrameDetector.swift` | finds the two slide frames on 2-up handout pages |
-| `Web/` | chat page (`chat.html/css/js`, `render.js`), section indexer (`walkthrough_index.js`), "Ask about this" on study pages (`walkthrough_ask.js`), the web tab's page reader (`webbook_read.js`, in its own content world), vendored KaTeX, marked and DOMPurify |
+- Your slides, notes and chats stay on your Mac (chats in `~/Library/Application Support/Co-learner/`). What goes out is what any Claude Code or Codex session sends: the question and what goes with it.
+- Claude runs with read-only tools (Read, Grep, Glob), no MCP servers and no settings or memory files, and can read only the open deck's folders and its study pages. Codex runs in a read-only sandbox with shell commands and web search off.
+- In a web tab, neither assistant gets any tools, and both are told that page text is reference material, not instructions.
+- The clipboard is read only when you paste, so macOS never asks for clipboard access.
 
-## Changelog
+## Development
 
-- 2026-11-06 (no version change): the Lectures menu is **Shortcuts**, without its icon (it lists every section, not only lectures). Plan usage moved out of the chat into a **Usage** menu in the menu bar (each window and when it resets, when it was fetched, Refresh, Sign In when signed out; fetched again when the menu bar opens, at most every 2 minutes). The chat's header drops the deck name and slide number (the tab and the window title show them): *This slide* / *All* on the left, History, New chat and Search on the right, all one height. The line under the chat box saying what goes with your question is gone, so the conversation gets that row; an answer running on another slide is named next to Stop (under it when the bar has no room). An empty chat says only "Ask anything about slide N." (the rest is its tooltip).
-- 2026-11-02 (no version change): the lines under the tab bar and a web tab's bar meet the lines under the Chat / Walkthrough header and the chat header (the chat page reports its header's height; a page that fails to load says so under the line).
-- **0.2.1** (2026-11-02): **web tabs**: open a web page or online book in a tab (Open a Web Page…, ⇧⌘O, or a web link in a section) and ask about it like a slide: the assistants get each page's text (math as TeX, collapsed PreTeXt examples and proofs included) and a picture of what is on screen when it changed; one conversation per book across its pages; Back/Forward, zoom per book, tabs restored with their history at launch; ✂︎ Select area on the page; Claude without tools there. **Hide or show the thumbnail strip** under the slides (⌥⌘T), remembered for portrait and landscape pages apart. Checked end to end with scripted runs of a debug build (real Claude and ChatGPT answers about *Interactive Linear Algebra*, with the requests logged). Reviewed by an independent reviewer; its 8 confirmed findings are fixed with regression tests (other apps' links and downloads opening without a click, pages inside `display: contents`, 0.2 setting aside a sections.json with web links, scrolling inside a box not counting as a new view, a book's name resetting its sessions, a new page taking the last page's title, page numbers shifting, "slide N" in web prompts). 181 offline tests in 19 suites.
-- 2026-11-01 (no version change): the lecture page's highlight follows the pointer, one row at a time (rows scrolling under a still pointer no longer stay shaded); the lecture page (New Tab) fills the window, and Chat and Walkthrough come back with a lecture (or with ⌘1, ⌘2 or ⇧⌘F there); a section heading's + and ⋯ light up under the pointer like the tab bar's buttons.
-- **0.2** (2026-11-01): the lecture page is now **sections** you organize: make, rename, reorder and remove sections; link folders (shown as they are on disk, with subfolders you open in place) and single PDFs; drop them from Finder; drag a PDF or folder to another section (⌥ keeps it in both); hide files; rename a PDF on disk from the page. Real file names everywhere. The page follows Finder by itself (FSEvents, coming back to the app, Refresh), and a PDF renamed or moved keeps its chats, slide, tabs, walkthrough links and notes. Your courses and *Other PDFs* became the first sections. Reviewed by five independent reviewers (data safety, the page, integration, the request itself, and a read-only run on the real library and chats), each finding checked by a verifier: 25 confirmed findings (about 20 distinct issues) are fixed with regression tests, among them chats of a PDF replaced in Finder, tabs at launch after a rename, and Open a PDF… listing the file. Known limit: renaming or moving the deck on screen stops an answer that is still streaming and starts fresh assistant sessions for that deck (their notes name the old file); the chat itself is kept. 165 offline tests in 18 suites.
-- **0.1.10** (2026-11-01): **Sign in to Claude / ChatGPT** from the app when a login expires (the failed answer, the Co-learner menu, Settings and the usage card): Terminal runs the tool's own sign-in, the browser shows Authorize, and Co-learner notices when it's done and comes back. **Ask again** under a failed answer. The usage line says *signed out* when a tool reports it. 133 offline tests in 15 suites plus one opt-in live Terminal test.
-- 2026-10-30 (no version change): the build script stages the app in `build/app.noindex/`, so Spotlight lists only the installed copy.
-- **0.1.9** (2026-10-28): attach screenshots and other pictures to a question (⌘V, drop, or 📎 Screenshot); ask about the walkthrough: select text and click *Ask about this*, *Ask* for the section you are reading or the notes page, or capture a box of the walkthrough; *Reply* to a selected part of an answer. Quoted passages keep their math as TeX, are saved with the question and found by Search; the other assistant is told what went with earlier questions. The clipboard is read only inside a paste, as macOS requires. Pictures and a quote from a question nobody answered come back to the chat box. Reviewed in two rounds (five, then four independent reviewers, each finding checked by a verifier); all confirmed findings are fixed and the fixes verified again. 125 offline tests in 14 suites.
-- **0.1.8** (2026-10-18): add a saved Fast mode toggle to the ChatGPT model selector and Settings, with Fast labels on the selector and answers. Keeps model and reasoning effort unchanged and explicitly applies Fast or standard speed to new and resumed turns. Includes offline CLI and WebKit coverage.
-- **0.1.7** (2026-10-18): search saved chats across decks with ⇧⌘F, matching excerpts and direct navigation to the conversation, slide and highlighted message. Click slide references in assistant answers to see their source while keeping the answer visible. Includes offline search, navigation and real WebKit regression coverage.
-- **0.1.6** (2026-10-18): six reliability fixes for incomplete ChatGPT answers, crash recovery, refreshed assistant context after source changes, rebuilt notes PDFs, interactive walkthrough keyboard controls, and delayed scrolling across deck switches. Adds 23 offline regression tests across four suites; optimized release build verified. See the reliability review above for findings and coverage.
-- **0.1.5** (2026-10-17): one conversation per deck (deck text up front, slide images on demand, slides you mention attached, This slide / All view, New chat, History); select an area of a slide and ask about it; buttons cut to Explain and Visualize. Per-slide chats migrate into one conversation. Light / Dark / Automatic appearance switch. Browser-style tabs (+ / ⌘T New Tab with the lecture list, ⌘W closes a tab, tabs sized to their titles) with hover highlights on +, ×, the slide arrows and the menus; the Lectures menu lists deck names only. Slides and the right panel open at 3 : 2 (custom divider; double-click resets). Chat and Walkthrough can pop out into their own windows (for an iPad second screen), follow the slides there, dock back on close, and reopen at launch. Stop only stops the assistants being asked, and the answer shows "stopping…" until that assistant has really stopped (no new question can race it); a stopped or failed answer no longer counts as "seen" by that assistant; more ways to name slides ("slide #4", "pg 12", "3 through 6"). Builds are signed with a local certificate, so macOS keeps the Desktop permission across updates; the build script stops on a failed build.
-- **0.1.4** (2026-10-17): link and unlink study pages per deck from the Walkthrough tab (🔗 menu), with Link again; hand-linked pages of two-up decks use the split-slide numbering. Tested with the real library loader on a scratch settings folder (11/11).
-- **0.1.3** (2026-10-17): walkthrough pages and notes PDFs made later are found automatically (StudyDiscovery.swift).
-- **0.1.2** (2026-10-17): model lists come from the tools and refresh at every launch (and with *Refresh list*): Claude Code's aliases resolved with `/model <alias>`, effort levels from `claude --help`, Codex's `model/list`. Choose which models the menu shows; *New* badge for new models (and when an alias like "opus" starts meaning a newer model); effort is a slider; no model descriptions. A refresh that comes back partial or offline (Codex's built-in presets) is not applied; the plan's list comes from Codex's own cache, which model/list refreshes. Reviewed (2 reviewers + verifiers): model buttons no longer get rebuilt while an answer streams (clicks were lost), the effort slider keeps keyboard focus and drags across redraws.
-- **0.1.1** (2026-10-17): model and effort menu, click-to-open usage card refreshed on demand (`claude -p /usage`, Codex app-server rate limits), ← → turn slides, 2-up slide frames measured per deck, chat page no longer scrolls away.
-- **0.1** (2026-10-17): first version. Reviewed by four independent reviewers (Swift core, UI/model, chat page with 103 browser tests, requirements) with adversarial verification; all confirmed findings fixed before release (two-up slide image and text, deck-switch slide, notes map, chat-page sandbox and sanitizing, partial answers on quit, session handling).
+- `swift run` starts a debug build. `scripts/test.sh` runs the 185 tests in 20 suites (two of them opt-in) without any network: fake CLI executables, temporary chats, generated PDFs and real WebKit pages.
+- [Development notes](docs/DEVELOPMENT.md): how the app talks to each CLI, how the library finds study pages, building, testing, and a map of the source files.
+- [Changelog](docs/CHANGELOG.md): what changed in each version, from 0.1 on October 17, 2026.
+- The pictures above come from a debug build driven by `COLEARNER_SCRIPT` on a demo lecture written for it ([docs/demo](docs/demo)). The answers in them are real Claude answers.
+
+## How it was built
+
+I designed Co-learner for my own studying and use it to review my lectures. The code was written with [Claude Code](https://github.com/anthropics/claude-code) as my coding agent, which is why the commits carry a `Co-Authored-By: Claude` line. My part was deciding what the app should do, specifying each feature, and testing every release in my own studying; the larger releases also went through code reviews by separate AI agents, and each confirmed finding was fixed with a regression test. Twelve releases have shipped since October 17, 2026; every one after the first came from a round of my own feedback.
+
+## Acknowledgements
+
+The chat page uses [KaTeX](https://katex.org) (MIT), [marked](https://marked.js.org) (MIT) and [DOMPurify](https://github.com/cure53/DOMPurify) (Apache 2.0 or MPL 2.0), vendored in `Sources/CoLearner/Web/vendor` with their licenses.

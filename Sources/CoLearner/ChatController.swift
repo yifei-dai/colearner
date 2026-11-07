@@ -13,6 +13,10 @@ final class ChatController: NSObject, WKNavigationDelegate {
     private var ready = false
     private var running: [String: RunHandle] = [:]          // assistant message id -> process
     private var stopping: [String: RunHandle] = [:]         // stopped, process not exited yet
+    #if DEBUG
+    /// Debug scripts (`idle`, `film`): true while an assistant is still writing or stopping.
+    var debugAnswering: Bool { !running.isEmpty || !stopping.isEmpty }
+    #endif
     private var saved = Set<String>()                        // runs whose turn completed (in the session)
     private var runWhere: [String: (deck: String, conv: String)] = [:]
     /// What an assistant had seen before a run; put back if the run is stopped or fails (it may never have

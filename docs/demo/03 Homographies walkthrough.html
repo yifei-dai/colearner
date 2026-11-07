@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homographies and RANSAC: walkthrough</title>
+<link rel="stylesheet" href="katex/katex.min.css">
+<script src="katex/katex.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --ink: #1f2430; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #3d5afe; --accent-soft: #eef1ff; --warm: #e8590c; --warm-soft: #fff3eb;
+    --good: #2f9e44; --good-soft: #ebf7ee; --card: #f8f9fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17191e; --ink: #e8eaf0; --muted: #9aa1ad; --line: #2c3038;
+      --accent: #7c8cff; --accent-soft: #232a4a; --warm: #ff8a4c; --warm-soft: #3a2619;
+      --good: #5fcf77; --good-soft: #1c3324; --card: #1e2128;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 22px 22px 60px; }
+  header.hero { padding: 10px 0 18px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+  .eyebrow { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  h1 { font-size: 27px; line-height: 1.2; margin: 6px 0 8px; }
+  .lede { color: var(--muted); margin: 0; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
+  nav.toc a { font-size: 12.5px; color: var(--accent); background: var(--accent-soft); padding: 3px 9px;
+              border-radius: 999px; text-decoration: none; }
+  section { padding: 22px 0 6px; border-bottom: 1px solid var(--line); }
+  section > .eyebrow { color: var(--muted); }
+  h2 { font-size: 20px; margin: 4px 0 10px; }
+  h3 { font-size: 15.5px; margin: 16px 0 6px; }
+  p { margin: 8px 0; }
+  .plain { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 8px; margin: 12px 0; }
+  .plain b:first-child { color: var(--accent); }
+  .warn { background: var(--warm-soft); border-left: 3px solid var(--warm); padding: 10px 14px; border-radius: 8px; margin: 12px 0; }
+  .md { overflow-x: auto; padding: 4px 0; }
+  .cp { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 14px 0; }
+  .cp .q { font-weight: 600; margin-bottom: 8px; }
+  .cp .tag { font-size: 11px; font-weight: 700; color: var(--good); text-transform: uppercase; letter-spacing: .05em; }
+  .opts { display: grid; gap: 6px; }
+  .opts button { text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                 border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+  .opts button:hover { border-color: var(--accent); }
+  .opts button.right { border-color: var(--good); background: var(--good-soft); }
+  .opts button.wrong { border-color: var(--warm); background: var(--warm-soft); }
+  .fb { margin-top: 8px; font-size: 14px; min-height: 1.2em; }
+  .demo { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 14px 0; }
+  .demo .tag { font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .05em; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+  .row label { min-width: 150px; color: var(--muted); font-size: 14px; }
+  input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+  select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+  .big { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  ol, ul { padding-left: 1.3em; } li { margin: 4px 0; }
+  table { border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+  td, th { border-bottom: 1px solid var(--line); padding: 4px 12px; text-align: center; }
+  .sheet { columns: 2 260px; column-gap: 22px; }
+  .sheet div { break-inside: avoid; margin-bottom: 10px; }
+  .muted { color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<main>
+<header class="hero">
+  <div class="eyebrow">Computer Vision · Lecture 3 · Walkthrough</div>
+  <h1>Homographies and RANSAC</h1>
+  <p class="lede">How two overlapping photos become one panorama: the 3×3 matrix that relates them, how to solve for it from matched points, and how to keep wrong matches from ruining the answer.</p>
+  <nav class="toc">
+    <a href="#why">Why align</a><a href="#homography">Homography</a><a href="#dlt">DLT</a><a href="#normalize">Normalize</a>
+    <a href="#outliers">Outliers</a><a href="#ransac">RANSAC</a><a href="#warp">Warp &amp; blend</a><a href="#summary">Summary</a>
+  </nav>
+</header>
+
+<section id="why" data-pages="1-2">
+  <div class="eyebrow">Slides 1–2</div>
+  <h2>Why align images at all?</h2>
+  <p>A panorama is several photos taken from one spot, turned a little between shots. Each pair overlaps, so the same scene points appear in both. If we know how a point in photo A moves to photo B, we can paint B into A's frame and get one wide image.</p>
+  <div class="plain"><b>In plain words.</b> Match a few landmarks, find the "rule" that moves A's landmarks onto B's, then apply that rule to every pixel.</div>
+  <p>The pipeline has three steps: <b>match</b> features, <b>estimate</b> the transform, <b>warp and blend</b>. This lecture is about step 2, and about surviving the wrong matches that step 1 always produces.</p>
+</section>
+
+<section id="homography" data-pages="3">
+  <div class="eyebrow">Slide 3</div>
+  <h2>What a homography is</h2>
+  <p>Write a pixel as a homogeneous vector <span class="m">\mathbf{x}=(x,y,1)^\top</span>. A homography is a 3×3 matrix <span class="m">H</span> with</p>
+  <div class="md">\mathbf{x}' \sim H\mathbf{x},</div>
+  <p>where <span class="m">\sim</span> means equal up to a nonzero scale. To get back to pixels, divide by the third coordinate:</p>
+  <div class="md">x'=\frac{h_{11}x+h_{12}y+h_{13}}{h_{31}x+h_{32}y+h_{33}},\qquad y'=\frac{h_{21}x+h_{22}y+h_{23}}{h_{31}x+h_{32}y+h_{33}}.</div>
+  <div class="plain"><b>In plain words.</b> A homography can rotate, scale, shear and add perspective (far parts shrink), but it always keeps straight lines straight.</div>
+  <p>It is exact in two situations: the scene is a <b>plane</b> (a wall, a document), or the camera <b>only rotates</b> about its center (a panorama taken without stepping sideways).</p>
+  <div class="cp" data-answer="b">
+    <div class="tag">Checkpoint</div>
+    <div class="q">H has 9 entries. Why do we say it has only 8 degrees of freedom?</div>
+    <div class="opts">
+      <button data-k="a">Because <span class="m">h_{33}</span> must be 1 for every homography.</button>
+      <button data-k="b">Because <span class="m">H</span> and <span class="m">cH</span> give the same mapping for any <span class="m">c\neq 0</span>.</button>
+      <button data-k="c">Because the last row is always <span class="m">(0,0,1)</span>.</button>
+    </div>
+    <div class="fb"></div>
+  </div>
+</section>
+
+<section id="dlt" data-pages="4-5">
+  <div class="eyebrow">Slides 4–5</div>
+  <h2>Solving for H with the DLT</h2>
+  <p>The division makes the mapping nonlinear, but multiplying it out gives equations that are <b>linear in the entries of H</b>. Stack the entries as <span class="m">\mathbf{h}=(h_{11},\dots,h_{33})^\top</span>. One match <span class="m">(x,y)\leftrightarrow(x',y')</span> gives two rows:</p>
+  <div class="md">\begin{bmatrix} -x & -y & -1 & 0 & 0 & 0 & xx' & yx' & x' \\ 0 & 0 & 0 & -x & -y & -1 & xy' & yy' & y' \end{bmatrix}\mathbf{h}=\mathbf{0}</div>
+  <p>With <span class="m">n\ge 4</span> matches the rows form a <span class="m">2n\times 9</span> matrix <span class="m">A</span>. We want <span class="m">A\mathbf{h}=\mathbf{0}</span>, but <span class="m">\mathbf{h}=\mathbf{0}</span> is useless, so we fix the scale:</p>
+  <div class="md">\min_{\mathbf{h}}\ \lVert A\mathbf{h}\rVert\quad\text{subject to}\quad\lVert\mathbf{h}\rVert=1.</div>
+  <p>The minimizer is the right singular vector of <span class="m">A</span> with the smallest singular value: the last column of <span class="m">V</span> in <span class="m">A=U\Sigma V^\top</span>.</p>
+  <div class="warn"><b>Common slip.</b> <code>numpy.linalg.svd</code> returns <span class="m">V^\top</span>, so the answer is its last <i>row</i>: <code>h = Vt[-1]</code>, then <code>H = h.reshape(3, 3)</code>.</div>
+</section>
+
+<section id="normalize" data-pages="6">
+  <div class="eyebrow">Slide 6</div>
+  <h2>Normalize before you solve</h2>
+  <p>With pixel coordinates near 1000, the columns of <span class="m">A</span> hold numbers from 1 up to <span class="m">xx'\approx 10^6</span>. The SVD then treats tiny errors in the big columns as huge, and the answer gets noisy.</p>
+  <ol>
+    <li>Build <span class="m">T</span> that moves the points' centroid to the origin and scales them so the mean distance to it is <span class="m">\sqrt2</span> (same for <span class="m">T'</span> on the other image).</li>
+    <li>Run the DLT on <span class="m">T\mathbf{x}</span> and <span class="m">T'\mathbf{x}'</span> to get <span class="m">\hat H</span>.</li>
+    <li>Undo it: <span class="m">H=T'^{-1}\hat H\,T</span>.</li>
+  </ol>
+  <div class="plain"><b>In plain words.</b> Put both point sets in the same "units" first, solve, then convert the answer back.</div>
+</section>
+
+<section id="outliers" data-pages="7">
+  <div class="eyebrow">Slide 7</div>
+  <h2>Why one wrong match is a problem</h2>
+  <p>Least squares minimizes the <i>sum</i> of squared errors, so a single match that is far off contributes a huge term and drags the whole fit toward it. Feature matching on real photos always produces some wrong matches (outliers): repeated textures, moving objects, glare.</p>
+  <p>We need an estimator that <b>ignores</b> points it cannot explain. That is RANSAC.</p>
+</section>
+
+<section id="ransac" data-pages="8-9">
+  <div class="eyebrow">Slides 8–9</div>
+  <h2>RANSAC, step by step</h2>
+  <ol>
+    <li>Pick 4 matches at random (the minimum for a homography).</li>
+    <li>Fit <span class="m">H</span> to them with the DLT.</li>
+    <li>Count the inliers: matches with <span class="m">\lVert\mathbf{x}'_i-H(\mathbf{x}_i)\rVert&lt;\varepsilon</span>, where <span class="m">H(\mathbf{x})</span> means apply <span class="m">H</span>, then divide by the third coordinate.</li>
+    <li>Repeat <span class="m">N</span> times; keep the <span class="m">H</span> with the most inliers and refit it on all of them.</li>
+  </ol>
+  <h3>How many rounds?</h3>
+  <p>If a fraction <span class="m">w</span> of matches are inliers, a random sample of <span class="m">s</span> is clean with probability <span class="m">w^s</span>. For at least one clean sample with probability <span class="m">p</span>:</p>
+  <div class="md">N=\left\lceil\frac{\log(1-p)}{\log\left(1-w^{s}\right)}\right\rceil</div>
+  <div class="demo" id="ransac-demo">
+    <div class="tag">Try it</div>
+    <div class="row"><label for="w">Inlier fraction <i>w</i></label><input id="w" type="range" min="0.1" max="0.95" step="0.05" value="0.5"><b id="wv">0.50</b></div>
+    <div class="row"><label for="s">Sample size <i>s</i></label>
+      <select id="s"><option value="2">2 (a line)</option><option value="4" selected>4 (a homography)</option><option value="8">8 (a fundamental matrix)</option></select></div>
+    <div class="row"><label>Rounds for <i>p</i> = 0.99</label><span class="big" id="n">72</span></div>
+    <div class="bar"><div id="nb"></div></div>
+    <p class="muted">The count depends on <i>w</i> and <i>s</i>, not on how many matches there are. Bigger samples need far more rounds, which is why RANSAC fits the minimal 4.</p>
+  </div>
+</section>
+
+<section id="warp" data-pages="10">
+  <div class="eyebrow">Slide 10</div>
+  <h2>Warping and blending</h2>
+  <p><b>Backward warping.</b> Loop over the <i>output</i> pixels <span class="m">\mathbf{p}</span>, look up the source image at <span class="m">H^{-1}\mathbf{p}</span> and interpolate. Going this direction gives every output pixel a value, so there are no holes.</p>
+  <p><b>Feathering.</b> Weight each image by its distance to its own border (a distance transform) and average the overlap:</p>
+  <div class="md">I(\mathbf{p})=\frac{\sum_k w_k(\mathbf{p})\,I_k(\mathbf{p})}{\sum_k w_k(\mathbf{p})}</div>
+  <div class="plain"><b>In plain words.</b> Near its edge an image counts for little, so one photo fades into the next instead of meeting it at a hard seam.</div>
+</section>
+
+<section id="summary" data-pages="11">
+  <div class="eyebrow">Slide 11</div>
+  <h2>Summary and cheat sheet</h2>
+  <div class="sheet">
+    <div><b>Homography.</b> <span class="m">\mathbf{x}'\sim H\mathbf{x}</span>, 3×3, 8 DOF. Exact for a plane or a rotating camera.</div>
+    <div><b>DLT.</b> 2 rows per match, <span class="m">A\mathbf{h}=\mathbf{0}</span>, <span class="m">\mathbf{h}</span> = last right singular vector. Needs 4 matches.</div>
+    <div><b>Normalize.</b> Centroid to 0, mean distance <span class="m">\sqrt2</span>; <span class="m">H=T'^{-1}\hat HT</span>.</div>
+    <div><b>RANSAC.</b> Sample 4, fit, count inliers within <span class="m">\varepsilon</span>; keep the best; refit.</div>
+    <div><b>Rounds.</b> <span class="m">N=\lceil\log(1-p)/\log(1-w^s)\rceil</span>; <span class="m">w=0.5,s=4,p=0.99\Rightarrow N=72</span>.</div>
+    <div><b>Warp.</b> Backward with <span class="m">H^{-1}</span>; blend with distance-transform weights.</div>
+  </div>
+</section>
+</main>
+<script>
+  for (const el of document.querySelectorAll(".m")) katex.render(el.textContent, el, { throwOnError: false });
+  for (const el of document.querySelectorAll(".md")) katex.render(el.textContent, el, { throwOnError: false, displayMode: true });
+
+  for (const cp of document.querySelectorAll(".cp")) {
+    const fb = cp.querySelector(".fb");
+    for (const b of cp.querySelectorAll(".opts button")) b.addEventListener("click", () => {
+      const ok = b.dataset.k === cp.dataset.answer;
+      cp.querySelectorAll(".opts button").forEach(x => x.classList.remove("right", "wrong"));
+      b.classList.add(ok ? "right" : "wrong");
+      fb.textContent = ok ? "Right: scaling H by any nonzero c changes x' and its third coordinate alike, so the pixel it lands on is the same. One of the 9 numbers is free."
+                          : "Not quite. h33 can be any value (even 0), and the last row is (0, 0, 1) only for affine maps; what never matters is the overall scale.";
+    });
+  }
+
+  const w = document.getElementById("w"), s = document.getElementById("s");
+  function rounds() {
+    const wv = +w.value, sv = +s.value, n = Math.ceil(Math.log(1 - 0.99) / Math.log(1 - Math.pow(wv, sv)));
+    document.getElementById("wv").textContent = wv.toFixed(2);
+    document.getElementById("n").textContent = n.toLocaleString();
+    document.getElementById("nb").style.width = Math.min(100, 100 * Math.log10(n + 1) / 5) + "%";
+  }
+  w.addEventListener("input", rounds); s.addEventListener("change", rounds); rounds();
+</script>
+</body>
+</html>
