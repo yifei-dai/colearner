@@ -6,8 +6,7 @@
 
 **Study lecture slides with an AI tutor beside them.**
 
-A native macOS app that puts your slides, a Claude and ChatGPT chat that knows which slide you are on,<br>
-and your study notes in one window. Turn a slide, and the notes scroll to match.
+A native macOS app that puts your slides, a Claude and ChatGPT chat that knows which slide you are on, and your study notes in one window. Turn a slide, and the notes scroll to match.
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-111111?logo=apple&logoColor=white)
 ![SwiftUI + AppKit](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)
@@ -77,19 +76,13 @@ Reviewing a lecture used to mean the slides on an iPad, ChatGPT in one browser t
 
 ```mermaid
 flowchart LR
-    subgraph app["Co-learner.app (SwiftUI + AppKit)"]
-        direction TB
-        slides["Slides<br/>PDFKit"]
-        notes["Walkthrough and notes<br/>WKWebView, PDFKit"]
-        ask["Question builder<br/>slide text and pictures,<br/>areas, screenshots, quotes"]
-        chat["Chat page<br/>WKWebView with marked,<br/>KaTeX and DOMPurify"]
-        slides --> ask
-        notes --> ask
-        ask --> run["CLI runners<br/>streamed JSON events"]
-        run --> chat
-    end
-    run <-->|"claude -p --output-format stream-json"| cc["Claude Code"]
-    run <-->|"codex exec --json"| cx["Codex CLI"]
+    slides["Slides (PDFKit)"] --> ask["Question builder"]
+    notes["Walkthrough and notes"] --> ask
+    extra["Areas, screenshots, quotes"] --> ask
+    ask --> run["CLI runners"]
+    run <-->|"claude -p, stream-json"| cc(["Claude Code"])
+    run <-->|"codex exec --json"| cx(["Codex CLI"])
+    run --> chat["Chat page (WKWebView, KaTeX)"]
 ```
 
 Co-learner has no API keys and no server. It runs the Claude Code and Codex command-line tools that are already signed in on your Mac, streams their JSON events into the chat page, and resumes the same Claude session and Codex thread for every follow-up in a conversation. So answers count against your own Claude and ChatGPT plans, and the app's live **Usage** menu shows how much of each plan window is left.
