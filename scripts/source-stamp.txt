@@ -1,0 +1,4 @@
+# GitHub's zip and tarball downloads (git archive) put the commit, its time and its date on the line below, so a
+# build from a download knows which code it is (export-subst in .gitattributes). In a git clone the line stays as
+# written and scripts/build_app.sh asks git instead.
+$Format:%h %ct %cs$

@@ -1,0 +1,2 @@
+# Downloads from GitHub fill in the commit, so scripts/build_app.sh knows which code it builds.
+scripts/source-stamp.txt export-subst

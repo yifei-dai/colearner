@@ -19,6 +19,9 @@ struct CoLearnerApp: App {
         }
         .defaultSize(width: 1440, height: 860)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Co-learner") { BuildStamp.showAboutPanel() }
+            }
             CommandGroup(after: .appSettings) {
                 // When a login expires: the tool's own sign-in, in Terminal and the browser.
                 Button("Sign In to Claude…") { model.chat.startSignIn(.claude) }
@@ -102,6 +105,25 @@ struct CoLearnerApp: App {
         Settings {
             SettingsView().environmentObject(model)
         }
+    }
+}
+
+/// Which code a build came from: the commit and date scripts/build_app.sh writes into Info.plist (from git, or from the
+/// stamp a GitHub download carries). Small changes keep the version number, so this tells an older copy from a newer one.
+enum BuildStamp {
+    /// "6dbe045, 2026-11-07" ("6dbe045+" when built with changes not yet committed); nil without a stamp (a bare
+    /// `swift build`, or a copy that didn't know its commit).
+    static func text(_ info: [String: Any]) -> String? {
+        guard let commit = info["CoLearnerSourceCommit"] as? String, !commit.isEmpty, commit != "unknown" else { return nil }
+        let date = info["CoLearnerSourceDate"] as? String ?? ""
+        return date.isEmpty ? commit : commit + ", " + date
+    }
+
+    /// The standard About panel with the stamp after the version: "Version 0.2.1 (6dbe045, 2026-11-07)".
+    @MainActor static func showAboutPanel() {
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [:]
+        if let s = text(Bundle.main.infoDictionary ?? [:]) { options[.version] = s }
+        NSApp.orderFrontStandardAboutPanel(options: options)
     }
 }
 
