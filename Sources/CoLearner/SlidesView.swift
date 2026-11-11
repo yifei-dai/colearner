@@ -16,6 +16,8 @@ struct SlideView: NSViewRepresentable {
         context.coordinator.view = v
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pageChanged(_:)),
                                                name: .PDFViewPageChanged, object: v)
+        NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pinchEnded(_:)),
+                                               name: NSScrollView.didEndLiveMagnifyNotification, object: nil)
         if let p = model.document?.page(at: model.page - 1) { v.go(to: p) }
 
         let container = NSView()
@@ -46,7 +48,7 @@ struct SlideView: NSViewRepresentable {
         }
         context.coordinator.overlay?.refresh(selecting: model.selectingArea)
         guard let doc = v.document, let target = doc.page(at: want - 1) else { return }
-        if v.currentPage !== target { v.go(to: target) }
+        if v.currentPage !== target { v.go(to: target, keepingZoom: true) }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -65,6 +67,46 @@ struct SlideView: NSViewRepresentable {
             let idx = i + 1
             if idx != model.page { model.page = idx }
         }
+
+        /// The end of a pinch on the slide: hold the zoom now, so that it also outlasts a page change PDFKit makes
+        /// itself and a change of the window's size.
+        @MainActor @objc func pinchEnded(_ n: Notification) {
+            guard let v = view, let scroll = n.object as? NSView, scroll.isDescendant(of: v) else { return }
+            v.holdZoom(smallerIsFit: true)
+        }
+    }
+}
+
+extension PDFView {
+    /// A pinch only magnifies PDFView's inner scroll view and leaves `autoScales` on, so the next page change (or a
+    /// change of the view's size) fits the page again. This turns a zoom the student made into a fixed scale, which
+    /// PDFView keeps from page to page, and a zoom back at the fitting size (within 2%) into fitting again, so the
+    /// page follows the window as before. `smallerIsFit`: a page made smaller than fitting also goes back to fitting
+    /// (a slide; notes may be kept small). True while a zoom is held.
+    @discardableResult
+    func holdZoom(smallerIsFit: Bool = false) -> Bool {
+        let fit = scaleFactorForSizeToFit, scale = scaleFactor
+        guard fit > 0, scale > 0 else { return !autoScales }
+        let fitting = abs(scale / fit - 1) < 0.02
+        if fitting || (smallerIsFit && scale < fit) {
+            if !fitting || !autoScales {
+                autoScales = false   // off first: setting it on while it is on fits nothing
+                autoScales = true
+            }
+            return false
+        }
+        if autoScales {
+            autoScales = false
+            scaleFactor = scale
+        }
+        return true
+    }
+
+    /// Another slide of the deck. An enlarged slide stays enlarged, on the same part of the slide (`keepingZoom`).
+    func go(to target: PDFPage, keepingZoom: Bool) {
+        guard keepingZoom, holdZoom(smallerIsFit: true), let from = currentPage else { go(to: target); return }
+        let shown = convert(bounds, to: from)
+        go(to: PDFDestination(page: target, at: NSPoint(x: shown.minX, y: shown.maxY)))
     }
 }
 

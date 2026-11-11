@@ -41,7 +41,10 @@ final class StudyPDFController: ObservableObject {
             return
         }
         status = hit.exact ? "Notes page \(hit.page) shows slide \(slide)" : "Notes page \(hit.page) (nearest slide shown before \(slide))"
-        if view.currentPage !== target { view.go(to: target) }
+        if view.currentPage !== target {
+            view.holdZoom()   // notes pinched larger or smaller stay that size when they follow the slide
+            view.go(to: target)
+        }
     }
 
     // MARK: asking about the notes

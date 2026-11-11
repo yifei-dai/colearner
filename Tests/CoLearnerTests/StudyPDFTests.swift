@@ -147,6 +147,30 @@ struct StudyPDFTests {
         e.location = CGPoint(x: p.x, y: (NSScreen.screens.first?.frame.height ?? 0) - p.y)   // global: from the top left
         return try #require(NSEvent(cgEvent: e))
     }
+
+    @Test func pinchedNotesKeepTheirSizeWhenTheyFollowTheSlide() throws {
+        let fixture = try NotesFixture()
+        defer { fixture.remove() }
+        try fixture.write([(deck: "first.pdf", slide: 1), (deck: "first.pdf", slide: 2), (deck: "first.pdf", slide: 3)])
+        let viewer = StudyPDFController()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 600), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        viewer.view.frame = NSRect(x: 0, y: 0, width: 500, height: 600)
+        window.contentView?.addSubview(viewer.view)
+        viewer.show(fixture.studyPage, deckFile: "first.pdf", slide: 1, follow: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let fit = viewer.view.scaleFactorForSizeToFit
+        let scroll = try #require(viewer.view.documentView?.enclosingScrollView)
+        scroll.magnification = fit * 1.5   // a pinch: only the inner scroll view's magnification changes
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        viewer.show(fixture.studyPage, deckFile: "first.pdf", slide: 3, follow: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(viewer.view.currentPage === viewer.view.document?.page(at: 2))
+        #expect(abs(viewer.view.scaleFactor / fit - 1.5) < 0.01)
+    }
 }
 
 /// Minimal real PDFs with the same XObject stamps that pdfTeX places on included lecture slides, and a line of text

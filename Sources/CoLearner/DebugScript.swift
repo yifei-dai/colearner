@@ -1,11 +1,12 @@
 #if DEBUG
 import AppKit
+import PDFKit
 import WebKit
 
 /// Debug builds only: COLEARNER_SCRIPT drives the app for an end-to-end check without anyone at the keyboard, one
 /// step per ";" — open <address>, pdf <path>, newtab, wait <seconds>, shot <png path>, thumbs, scroll <y>,
 /// goto <heading text>, readtext <txt path>, click <link text>, menus <txt path>, menushot <menu> <png path>, back,
-/// next, slide <n>, size <w> <h>, tab <chat|walkthrough>, appearance <light|dark|system>, area <x0 y0 x1 y1>,
+/// next, slide <n>, zoom <factor>, size <w> <h>, tab <chat|walkthrough>, appearance <light|dark|system>, area <x0 y0 x1 y1>,
 /// chrome <on|off>, float <on|off>, chatjs <javascript>, ask <claude|codex|both> <question>, idle <most seconds>,
 /// film <png prefix> <seconds> <frames>, stop, close, quit. `shot` draws the window itself
 /// (web views by their own snapshots), so no screen-recording permission is involved.
@@ -128,6 +129,20 @@ enum DebugScript {
             next()
         case "slide":
             model.goToPage(Int(arg) ?? 1)
+            next()
+        case "zoom":
+            // "zoom 2": the slide twice as large, the way a pinch does it (only the inner scroll view's magnification
+            // changes); "zoom" alone only logs. The log line says how large the slide is, as a multiple of fitting.
+            func find(_ v: NSView) -> PDFView? {
+                if let p = v as? PDFView, p.displayMode == .singlePage { return p }
+                return v.subviews.lazy.compactMap(find).first
+            }
+            if let v = model.mainWindow?.contentView.flatMap(find), let scroll = v.documentView?.enclosingScrollView {
+                if let f = Double(arg) { scroll.magnification *= f }
+                let shown = v.currentPage.map { v.convert(v.bounds, to: $0) } ?? .zero
+                log(String(format: "slide %d at %.2f x fitting, showing from (%.0f, %.0f)", model.page,
+                           v.scaleFactor / max(v.scaleFactorForSizeToFit, 0.001), shown.minX, shown.maxY))
+            } else { log("no slide view") }
             next()
         case "size":
             // "size 1440 860": the window's content size in points, centered on its screen.
