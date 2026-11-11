@@ -72,6 +72,37 @@ struct SlideZoomTests {
         #expect(v.holdZoom())
         #expect(abs(v.scaleFactor / v.scaleFactorForSizeToFit - 0.5) < 0.01)
     }
+
+    /// Two tabs share the one slide view: each deck comes back the way it was left.
+    @Test func eachDeckKeepsItsOwnZoomAcrossTabSwitches() throws {
+        let slide = try SlideFixture()
+        defer { slide.close() }
+        let v = slide.view, fit = v.scaleFactorForSizeToFit
+        let first = slide.document, second = try SlideFixture.deck()
+        v.go(to: try #require(first.page(at: 2)))
+        try slide.pinch(2)
+        try slide.scroll(dx: 60, dy: 40)
+        let left = v.convert(v.bounds, to: try #require(v.currentPage))
+
+        // To the second tab, never enlarged: it fits, and follows the window.
+        let firstZoom = try #require(v.heldZoom())
+        v.document = second
+        v.restore(nil, on: second.page(at: 0))
+        slide.settle()
+        #expect(v.autoScales)
+        #expect(abs(v.scaleFactor / fit - 1) < 0.001)
+        #expect(v.heldZoom() == nil)
+
+        // Back to the first: enlarged as before, on the same part of the slide.
+        v.document = first
+        v.restore(firstZoom, on: first.page(at: 2))
+        slide.settle()
+        #expect(v.currentPage === first.page(at: 2))
+        #expect(abs(v.scaleFactor / fit - 2) < 0.01)
+        let back = v.convert(v.bounds, to: try #require(v.currentPage))
+        #expect(abs(back.minX - left.minX) < 2 && abs(back.maxY - left.maxY) < 2)
+        #expect(abs(back.width - left.width) < 2)
+    }
 }
 
 /// A four-slide deck in a slide view like the app's, in a window.
@@ -81,7 +112,7 @@ private struct SlideFixture {
     let view = PDFView()
     let document: PDFDocument
 
-    init() throws {
+    static func deck() throws -> PDFDocument {
         let data = NSMutableData()
         var box = CGRect(x: 0, y: 0, width: 960, height: 540)
         let consumer = try #require(CGDataConsumer(data: data as CFMutableData))
@@ -92,7 +123,11 @@ private struct SlideFixture {
             ctx.endPDFPage()
         }
         ctx.closePDF()
-        document = try #require(PDFDocument(data: data as Data))
+        return try #require(PDFDocument(data: data as Data))
+    }
+
+    init() throws {
+        document = try Self.deck()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled, .resizable],
                           backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

@@ -112,6 +112,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var panelOnLecturePage = false
     @Published private(set) var deck: Deck?
     @Published private(set) var document: PDFDocument? { didSet { updateThumbnailsHidden() } }
+    /// Decks whose slides are enlarged, by path: a tab comes back the way it was left (this session only).
+    var slideZoom: [String: SlideZoom] = [:]
     private var documentRevision: FileRevision?
     private var documentThumbnailKey = ""
     @Published var page: Int = 1 {
@@ -533,6 +535,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(d.path == deck?.path ? page : UserDefaults.standard.integer(forKey: "lastPage.\(d.path)"),
                                   forKey: "lastPage.\(d.path)")
         openDecks.remove(at: i)
+        slideZoom[d.path] = nil   // opened again, it fits the window
         defer { if d.isWeb { closeWebTab(d.path) } }
         if deck?.path == d.path {
             selectingArea = false

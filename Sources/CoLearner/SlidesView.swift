@@ -14,11 +14,20 @@ struct SlideView: NSViewRepresentable {
         v.backgroundColor = NSColor.underPageBackgroundColor
         v.document = model.document
         context.coordinator.view = v
+        context.coordinator.deckPath = model.deck?.path
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pageChanged(_:)),
                                                name: .PDFViewPageChanged, object: v)
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.pinchEnded(_:)),
                                                name: NSScrollView.didEndLiveMagnifyNotification, object: nil)
-        if let p = model.document?.page(at: model.page - 1) { v.go(to: p) }
+        if let p = model.document?.page(at: model.page - 1) {
+            v.go(to: p)
+            // A tab that was enlarged comes back enlarged. The view has no size yet, and the part of the slide that
+            // was showing can only be scrolled to once it has one.
+            if let zoom = model.slideZoom[model.deck?.path ?? ""] {
+                v.restore(zoom, on: p)
+                context.coordinator.restoreWhenSized(zoom, on: p)
+            }
+        }
 
         let container = NSView()
         v.frame = container.bounds
@@ -41,14 +50,23 @@ struct SlideView: NSViewRepresentable {
         guard let v = context.coordinator.view else { return }
         let want = model.page   // read first: swapping documents makes PDFView report its old page index
         if v.document !== model.document {
+            // Another tab: each deck keeps its own zoom (fitting, unless it was enlarged) and the part of the slide
+            // that was showing.
+            context.coordinator.rememberZoom()
             context.coordinator.swapping = true
             v.document = model.document
-            v.autoScales = true
             context.coordinator.swapping = false
+            context.coordinator.deckPath = model.deck?.path
+            v.restore(model.slideZoom[model.deck?.path ?? ""], on: v.document?.page(at: want - 1))
         }
         context.coordinator.overlay?.refresh(selecting: model.selectingArea)
         guard let doc = v.document, let target = doc.page(at: want - 1) else { return }
         if v.currentPage !== target { v.go(to: target, keepingZoom: true) }
+    }
+
+    /// The slide view goes away behind a web tab or the lecture page: its deck's zoom is kept for when it comes back.
+    static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
+        MainActor.assumeIsolated { coordinator.rememberZoom() }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -58,7 +76,28 @@ struct SlideView: NSViewRepresentable {
         weak var view: PDFView?
         weak var overlay: AreaSelectView?
         var swapping = false
+        /// The deck the view shows (the model may already be on another one).
+        var deckPath: String?
         init(model: AppModel) { self.model = model }
+
+        /// Keep the zoom of the deck on screen, before the view shows another deck or goes away.
+        @MainActor func rememberZoom() {
+            guard let v = view, let path = deckPath, v.document != nil,
+                  model.openDecks.contains(where: { $0.path == path }) else { return }   // not a tab just closed
+            model.slideZoom[path] = v.heldZoom()
+        }
+
+        /// A view just made has no size: scroll to the remembered part of the slide once it has one.
+        @MainActor func restoreWhenSized(_ zoom: SlideZoom, on page: PDFPage, tries: Int = 20) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+                guard let self, let v = self.view, v.currentPage === page, self.model.slideZoom[self.deckPath ?? ""] == zoom else { return }
+                if v.bounds.isEmpty || v.window == nil {
+                    if tries > 0 { self.restoreWhenSized(zoom, on: page, tries: tries - 1) }
+                    return
+                }
+                v.restore(zoom, on: page)
+            }
+        }
 
         @MainActor @objc func pageChanged(_ n: Notification) {
             guard !swapping, let v = view, let doc = v.document, let p = v.currentPage, doc === model.document else { return }
@@ -77,7 +116,33 @@ struct SlideView: NSViewRepresentable {
     }
 }
 
+/// How far a deck's slides are enlarged and which part shows: the scale, and the top left corner of the part on
+/// screen in page coordinates.
+struct SlideZoom: Equatable {
+    var scale: CGFloat
+    var corner: NSPoint
+}
+
 extension PDFView {
+    /// The zoom to remember for the deck on screen; nil while the slide fits the view.
+    func heldZoom() -> SlideZoom? {
+        guard holdZoom(smallerIsFit: true), let page = currentPage else { return nil }
+        let shown = convert(bounds, to: page)
+        return SlideZoom(scale: scaleFactor, corner: NSPoint(x: shown.minX, y: shown.maxY))
+    }
+
+    /// Show `page` the way its deck was left: enlarged on the same part of the slide, or (nil) fitting the view.
+    func restore(_ zoom: SlideZoom?, on page: PDFPage?) {
+        guard let zoom else {
+            autoScales = false   // off first: setting it on while it is on fits nothing
+            autoScales = true
+            return
+        }
+        autoScales = false
+        scaleFactor = zoom.scale
+        if let page { go(to: PDFDestination(page: page, at: zoom.corner)) }
+    }
+
     /// A pinch only magnifies PDFView's inner scroll view and leaves `autoScales` on, so the next page change (or a
     /// change of the view's size) fits the page again. This turns a zoom the student made into a fixed scale, which
     /// PDFView keeps from page to page, and a zoom back at the fitting size (within 2%) into fitting again, so the
